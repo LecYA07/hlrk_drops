@@ -1,0 +1,30 @@
+twitch:
+  channel: "hailrake_evo"
+  bot_nick: "hlrk_drops"
+  bot_token: "oauth:rwv76f95l5sui7hr43nvaa0qghr3s5"
+  client_id: "zlb44swn9iuyary2st4ckjmsafceq5"
+  client_secret: "wxllaxdqu6mhpizaqvsfcecqphi0js"
+  bot_id: "1446553887"
+
+telegram:
+  bot_token: "8500114970:AAHSoN_EDn9gL6WjNK2A_ONoROEY-tTqJj4"
+  admin_ids:
+    - 1257964240
+    - 857159341
+    - 232558076 # Add your Telegram ID here
+
+giveaway:
+  min_interval_minutes: 10
+  max_interval_minutes: 30
+  active_timeout_minutes: 15
+  stream_check_interval_seconds: 60
+  claim_timeout_minutes: 7
+
+database:
+  db_path: "rewards.db"
+
+ignore_list:
+  - "streamlabs"
+  - "streamelements"
+  - "nightbot"
+  - "moobot"

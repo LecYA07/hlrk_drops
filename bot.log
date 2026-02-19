@@ -1,0 +1,242 @@
+2026-02-19 07:00:27,236 - Database - INFO - Database initialized.
+2026-02-19 07:03:44,382 - Database - INFO - Database initialized.
+2026-02-19 07:05:11,062 - Database - INFO - Database initialized.
+2026-02-19 07:13:23,124 - Database - INFO - Database initialized.
+2026-02-19 07:13:23,128 - TwitchBot - ERROR - Не удалось получить bot_id через Helix: asyncio.run() cannot be called from a running event loop
+2026-02-19 07:13:23,202 - Database - INFO - Database initialized.
+2026-02-19 07:13:23,203 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:13:24,351 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:13:24,828 - twitchio.ext.commands.bot - INFO - Generated App Token for Client-ID: zlb44swn9iuyary2st4ckjmsafceq5
+2026-02-19 07:13:24,830 - twitchio.authentication.tokens - INFO - Loaded 0 tokens into ManagedHTTPClient.
+2026-02-19 07:13:25,319 - root - ERROR - Error in main loop: Request https://api.twitch.tv/helix/users?id=YOUR_TWITCH_BOT_USER_ID failed with status 400: {'error': 'Bad Request', 'status': 400, 'message': 'Invalid username(s), email(s), or ID(s). Bad Identifiers.'}
+2026-02-19 07:13:25,321 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:13:25,321 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:13:25,638 - asyncio - ERROR - Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x000001EE56D66090>
+2026-02-19 07:13:25,639 - asyncio - ERROR - Unclosed connector
+connections: ['[(<aiohttp.client_proto.ResponseHandler object at 0x000001EE56DA2270>, 1619368.203)]', '[(<aiohttp.client_proto.ResponseHandler object at 0x000001EE56DA25D0>, 1619368.687)]']
+connector: <aiohttp.connector.TCPConnector object at 0x000001EE56D66CF0>
+2026-02-19 07:17:07,342 - Database - INFO - Database initialized.
+2026-02-19 07:17:45,849 - Database - INFO - Database initialized.
+2026-02-19 07:17:47,147 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:23:22,284 - Database - INFO - Database initialized.
+2026-02-19 07:23:23,583 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:26:02,946 - Database - INFO - Database initialized.
+2026-02-19 07:26:04,474 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:39:15,586 - Database - INFO - Database initialized.
+2026-02-19 07:39:17,120 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:39:17,634 - Database - INFO - Database initialized.
+2026-02-19 07:39:17,634 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:39:18,558 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:39:19,159 - twitchio.ext.commands.bot - INFO - Generated App Token for Client-ID: zlb44swn9iuyary2st4ckjmsafceq5
+2026-02-19 07:39:19,160 - twitchio.authentication.tokens - INFO - Loaded 0 tokens into ManagedHTTPClient.
+2026-02-19 07:39:19,644 - twitchio.web.aio_adapter - INFO - Starting AiohttpAdapter(host="localhost", port=4343) on http://localhost:4343.
+2026-02-19 07:39:19,646 - twitchio.client - ERROR - Ignoring Exception in listener "TwitchBot.event_ready":
+Traceback (most recent call last):
+  File "C:\Users\vit\AppData\Local\Programs\Python\Python312\Lib\site-packages\twitchio\client.py", line 285, in _dispatch
+    await called_
+  File "C:\Users\vit\Desktop\standoff drops\bot.py", line 72, in event_ready
+    logger.info(f"Вошли как: {self.nick} (user_id={self.user_id})")
+                              ^^^^^^^^^
+AttributeError: 'TwitchBot' object has no attribute 'nick'
+2026-02-19 07:39:39,871 - aiogram.event - INFO - Update id=58192547 is handled. Duration 780 ms by bot id=8500114970
+2026-02-19 07:39:43,912 - aiogram.event - INFO - Update id=58192548 is handled. Duration 641 ms by bot id=8500114970
+2026-02-19 07:40:42,629 - aiogram.event - INFO - Update id=58192549 is handled. Duration 781 ms by bot id=8500114970
+2026-02-19 07:40:45,222 - aiogram.event - INFO - Update id=58192550 is handled. Duration 578 ms by bot id=8500114970
+2026-02-19 07:40:47,357 - aiogram.event - INFO - Update id=58192551 is handled. Duration 733 ms by bot id=8500114970
+2026-02-19 07:42:38,688 - aiogram.event - INFO - Update id=58192552 is handled. Duration 1343 ms by bot id=8500114970
+2026-02-19 07:42:41,140 - aiogram.event - INFO - Update id=58192553 is handled. Duration 1296 ms by bot id=8500114970
+2026-02-19 07:42:43,411 - aiogram.event - INFO - Update id=58192554 is handled. Duration 562 ms by bot id=8500114970
+2026-02-19 07:42:45,160 - aiogram.event - INFO - Update id=58192555 is handled. Duration 594 ms by bot id=8500114970
+2026-02-19 07:42:48,037 - aiogram.event - INFO - Update id=58192556 is handled. Duration 719 ms by bot id=8500114970
+2026-02-19 07:42:58,043 - aiogram.event - INFO - Update id=58192557 is handled. Duration 234 ms by bot id=8500114970
+2026-02-19 07:43:02,681 - aiogram.event - INFO - Update id=58192558 is handled. Duration 1859 ms by bot id=8500114970
+2026-02-19 07:43:03,643 - aiogram.event - INFO - Update id=58192559 is handled. Duration 1311 ms by bot id=8500114970
+2026-02-19 07:43:05,179 - aiogram.event - INFO - Update id=58192560 is handled. Duration 952 ms by bot id=8500114970
+2026-02-19 07:43:13,387 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:43:13,390 - twitchio.web.aio_adapter - INFO - Successfully shutdown TwitchIO <AiohttpAdapter>.
+2026-02-19 07:43:13,392 - twitchio.authentication.tokens - INFO - Tokens from ManagedHTTPClient have been saved to: ".tio.tokens.json".
+2026-02-19 07:43:13,396 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:43:13,399 - root - INFO - Bot stopped by user.
+2026-02-19 07:45:14,050 - Database - INFO - Database initialized.
+2026-02-19 07:45:14,054 - TwitchBot - INFO - bot_id не найден в конфиге, пробуем получить через Helix...
+2026-02-19 07:45:15,477 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:45:16,008 - TwitchBot - INFO - bot_id получен через Helix: 1446553887
+2026-02-19 07:45:16,014 - Database - INFO - Database initialized.
+2026-02-19 07:45:16,015 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:45:16,883 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:45:17,557 - twitchio.ext.commands.bot - INFO - Generated App Token for Client-ID: zlb44swn9iuyary2st4ckjmsafceq5
+2026-02-19 07:45:17,559 - twitchio.authentication.tokens - INFO - Loaded 0 tokens into ManagedHTTPClient.
+2026-02-19 07:45:18,072 - twitchio.web.aio_adapter - INFO - Starting AiohttpAdapter(host="localhost", port=4343) on http://localhost:4343.
+2026-02-19 07:45:18,072 - twitchio.client - ERROR - Ignoring Exception in listener "TwitchBot.event_ready":
+Traceback (most recent call last):
+  File "C:\Users\vit\AppData\Local\Programs\Python\Python312\Lib\site-packages\twitchio\client.py", line 285, in _dispatch
+    await called_
+  File "C:\Users\vit\Desktop\standoff drops\bot.py", line 88, in event_ready
+    nick = self.nick if self.nick else "Unknown"
+                        ^^^^^^^^^
+AttributeError: 'TwitchBot' object has no attribute 'nick'
+2026-02-19 07:46:16,493 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:46:16,494 - twitchio.web.aio_adapter - INFO - Successfully shutdown TwitchIO <AiohttpAdapter>.
+2026-02-19 07:46:16,496 - twitchio.authentication.tokens - INFO - Tokens from ManagedHTTPClient have been saved to: ".tio.tokens.json".
+2026-02-19 07:46:16,496 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:46:16,497 - root - INFO - Bot stopped by user.
+2026-02-19 07:46:21,334 - Database - INFO - Database initialized.
+2026-02-19 07:46:21,342 - TwitchBot - INFO - bot_id не найден в конфиге, пробуем получить через Helix...
+2026-02-19 07:46:22,716 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:46:23,294 - TwitchBot - INFO - bot_id получен через Helix: 1446553887
+2026-02-19 07:46:23,302 - Database - INFO - Database initialized.
+2026-02-19 07:46:23,306 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:46:24,169 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:46:24,730 - twitchio.ext.commands.bot - INFO - Generated App Token for Client-ID: zlb44swn9iuyary2st4ckjmsafceq5
+2026-02-19 07:46:24,731 - twitchio.authentication.tokens - INFO - Loaded 0 tokens into ManagedHTTPClient.
+2026-02-19 07:46:25,239 - twitchio.web.aio_adapter - INFO - Starting AiohttpAdapter(host="localhost", port=4343) on http://localhost:4343.
+2026-02-19 07:46:25,239 - TwitchBot - INFO - Вошли как: Unknown (user_id=Unknown)
+2026-02-19 07:47:00,724 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:47:00,725 - twitchio.web.aio_adapter - INFO - Successfully shutdown TwitchIO <AiohttpAdapter>.
+2026-02-19 07:47:00,726 - twitchio.authentication.tokens - INFO - Tokens from ManagedHTTPClient have been saved to: ".tio.tokens.json".
+2026-02-19 07:47:00,727 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:47:00,728 - root - INFO - Bot stopped by user.
+2026-02-19 07:47:04,906 - Database - INFO - Database initialized.
+2026-02-19 07:47:04,909 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 07:47:04,937 - Database - INFO - Database initialized.
+2026-02-19 07:47:04,937 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:47:05,772 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:47:06,408 - twitchio.ext.commands.bot - INFO - Generated App Token for Client-ID: zlb44swn9iuyary2st4ckjmsafceq5
+2026-02-19 07:47:06,409 - twitchio.authentication.tokens - INFO - Loaded 0 tokens into ManagedHTTPClient.
+2026-02-19 07:47:06,897 - twitchio.web.aio_adapter - INFO - Starting AiohttpAdapter(host="localhost", port=4343) on http://localhost:4343.
+2026-02-19 07:47:06,898 - TwitchBot - INFO - Вошли как: Unknown (user_id=Unknown)
+2026-02-19 07:48:00,778 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:48:00,779 - twitchio.web.aio_adapter - INFO - Successfully shutdown TwitchIO <AiohttpAdapter>.
+2026-02-19 07:48:00,781 - twitchio.authentication.tokens - INFO - Tokens from ManagedHTTPClient have been saved to: ".tio.tokens.json".
+2026-02-19 07:48:00,781 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:48:00,782 - root - INFO - Bot stopped by user.
+2026-02-19 07:48:21,948 - Database - INFO - Database initialized.
+2026-02-19 07:48:21,951 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 07:48:21,978 - Database - INFO - Database initialized.
+2026-02-19 07:48:21,980 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:48:22,928 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:48:23,601 - twitchio.ext.commands.bot - INFO - Generated App Token for Client-ID: zlb44swn9iuyary2st4ckjmsafceq5
+2026-02-19 07:48:23,602 - twitchio.authentication.tokens - INFO - Loaded 0 tokens into ManagedHTTPClient.
+2026-02-19 07:48:24,216 - twitchio.web.aio_adapter - INFO - Starting AiohttpAdapter(host="localhost", port=4343) on http://localhost:4343.
+2026-02-19 07:48:24,490 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 07:48:24,491 - TwitchBot - ERROR - Ошибка присоединения к каналу hailrake_evo: 'TwitchBot' object has no attribute 'join_channels'
+2026-02-19 07:49:01,939 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:49:01,941 - twitchio.web.aio_adapter - INFO - Successfully shutdown TwitchIO <AiohttpAdapter>.
+2026-02-19 07:49:01,941 - twitchio.authentication.tokens - INFO - Tokens from ManagedHTTPClient have been saved to: ".tio.tokens.json".
+2026-02-19 07:49:01,943 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:49:01,944 - root - INFO - Bot stopped by user.
+2026-02-19 07:50:40,918 - Database - INFO - Database initialized.
+2026-02-19 07:50:40,921 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 07:50:40,950 - Database - INFO - Database initialized.
+2026-02-19 07:50:40,950 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:50:41,849 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:50:43,691 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 07:50:43,735 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 07:50:43,735 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 07:50:45,019 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:53:36,573 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:53:36,576 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:53:36,577 - root - INFO - Bot stopped by user.
+2026-02-19 07:53:42,502 - Database - INFO - Database initialized.
+2026-02-19 07:53:42,506 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 07:53:42,536 - Database - INFO - Database initialized.
+2026-02-19 07:53:42,536 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:53:43,423 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:53:45,138 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 07:53:45,169 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 07:53:45,169 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 07:53:46,410 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:55:15,753 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:55:15,758 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:55:15,761 - root - INFO - Bot stopped by user.
+2026-02-19 07:55:31,035 - Database - INFO - Database initialized.
+2026-02-19 07:55:31,039 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 07:55:31,066 - Database - INFO - Database initialized.
+2026-02-19 07:55:31,066 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:55:32,135 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:55:33,578 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 07:55:33,603 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 07:55:33,604 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 07:55:34,814 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:55:46,213 - TwitchBot - INFO - Команда из чата: hailrake_evo: !test
+2026-02-19 07:55:49,949 - TwitchBot - INFO - Команда из чата: hailrake_evo: !ping
+2026-02-19 07:58:11,779 - TwitchBot - INFO - Команда из чата: hailrake_evo: !ping
+2026-02-19 07:58:13,798 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 07:58:13,804 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:58:13,807 - root - INFO - Bot stopped by user.
+2026-02-19 07:58:18,388 - Database - INFO - Database initialized.
+2026-02-19 07:58:18,393 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 07:58:18,426 - Database - INFO - Database initialized.
+2026-02-19 07:58:18,427 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 07:58:19,333 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 07:58:21,008 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 07:58:21,037 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 07:58:21,038 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 07:58:22,292 - Helix - INFO - Helix: app access token получен
+2026-02-19 07:58:25,252 - TwitchBot - INFO - Команда из чата: hailrake_evo: !ping
+2026-02-19 07:59:38,742 - aiogram.event - INFO - Update id=58192561 is handled. Duration 640 ms by bot id=8500114970
+2026-02-19 07:59:41,050 - aiogram.event - INFO - Update id=58192562 is handled. Duration 640 ms by bot id=8500114970
+2026-02-19 07:59:44,648 - TwitchBot - INFO - Команда из чата: hailrake_evo: !link SBTEO5
+2026-02-19 07:59:58,242 - aiogram.event - INFO - Update id=58192563 is handled. Duration 469 ms by bot id=8500114970
+2026-02-19 08:00:01,114 - aiogram.event - INFO - Update id=58192564 is handled. Duration 858 ms by bot id=8500114970
+2026-02-19 08:00:03,094 - aiogram.event - INFO - Update id=58192565 is handled. Duration 593 ms by bot id=8500114970
+2026-02-19 08:00:07,542 - aiogram.event - INFO - Update id=58192566 is handled. Duration 641 ms by bot id=8500114970
+2026-02-19 08:00:09,305 - aiogram.event - INFO - Update id=58192567 is handled. Duration 734 ms by bot id=8500114970
+2026-02-19 08:02:03,039 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 08:02:03,041 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:02:03,043 - root - INFO - Bot stopped by user.
+2026-02-19 08:02:13,635 - Database - INFO - Database initialized.
+2026-02-19 08:02:13,640 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 08:02:13,670 - Database - INFO - Database initialized.
+2026-02-19 08:02:13,670 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 08:02:14,632 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:02:16,279 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 08:02:16,315 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 08:02:16,316 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 08:02:17,565 - Helix - INFO - Helix: app access token получен
+2026-02-19 08:02:21,845 - TwitchBot - INFO - Команда из чата: hailrake_evo: !ping
+2026-02-19 08:02:26,715 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 08:02:26,716 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:02:26,717 - root - INFO - Bot stopped by user.
+2026-02-19 08:02:54,251 - Database - INFO - Database initialized.
+2026-02-19 08:02:54,254 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 08:02:54,283 - Database - INFO - Database initialized.
+2026-02-19 08:02:54,284 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 08:02:55,095 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:02:56,678 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 08:02:56,706 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 08:02:56,706 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 08:02:57,945 - Helix - INFO - Helix: app access token получен
+2026-02-19 08:03:07,082 - TwitchBot - INFO - Команда из чата: hailrake_evo: !ping
+2026-02-19 08:07:35,192 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 08:07:35,195 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:07:35,198 - root - INFO - Bot stopped by user.
+2026-02-19 08:08:05,646 - Database - INFO - Database initialized.
+2026-02-19 08:08:05,649 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 08:08:05,683 - Database - INFO - Database initialized.
+2026-02-19 08:08:05,683 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 08:08:06,622 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:08:08,275 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 08:08:08,307 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 08:08:08,307 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 08:08:09,555 - Helix - INFO - Helix: app access token получен
+2026-02-19 08:08:14,608 - TwitchBot - INFO - Команда из чата: hailrake_evo: !ping
+2026-02-19 08:12:21,759 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 08:12:21,764 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:12:21,767 - root - INFO - Bot stopped by user.
+2026-02-19 08:15:34,298 - Database - INFO - Database initialized.
+2026-02-19 08:15:34,302 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 08:15:34,334 - Database - INFO - Database initialized.
+2026-02-19 08:15:34,334 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 08:15:35,242 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:15:36,888 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 08:15:36,918 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 08:15:36,918 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 08:15:38,166 - Helix - INFO - Helix: app access token получен
+2026-02-19 08:15:46,513 - TwitchBot - INFO - Команда из чата: hailrake_evo: !ping
+2026-02-19 08:15:53,940 - TwitchBot - INFO - Команда из чата: hailrake_evo: !test
+2026-02-19 08:15:59,401 - TwitchBot - INFO - Команда из чата: hailrake_evo: !link
+2026-02-19 08:16:45,087 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 08:16:45,088 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 08:16:45,091 - root - INFO - Bot stopped by user.
