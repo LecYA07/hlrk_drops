@@ -303,14 +303,12 @@ async def withdraw_photo(message: Message):
     await message.answer("Укажи цену лота числом. Пример: 123 или 123.45")
 
 
-@dp.message(F.chat.type == "private", F.text)
+@dp.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
 async def withdraw_text(message: Message):
     session = withdraw_sessions.get(message.from_user.id)
     if not session:
         return
     text = (message.text or "").strip()
-    if text.startswith("/"):
-        return
 
     if session.get("stage") == "price":
         raw = text.replace(",", ".").strip()
@@ -624,14 +622,12 @@ async def cmd_del_check_channel(message: Message):
     await message.answer("Канал удалён.")
 
 
-@dp.message(F.chat.type == "private", F.text)
+@dp.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
 async def admin_check_flow(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
     sess = admin_check_sessions.get(message.from_user.id)
     if not sess:
-        return
-    if (message.text or "").startswith("/"):
         return
     if sess.get("stage") != "params":
         return
