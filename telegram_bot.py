@@ -2,6 +2,7 @@ import asyncio
 import logging
 import random
 import string
+import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -22,11 +23,21 @@ with open("config.yaml", "r") as f:
 
 TOKEN = config["telegram"]["bot_token"]
 ADMIN_IDS = set(config["telegram"].get("admin_ids", []))
+ADMIN_CHAT_ID = int(config["telegram"].get("admin_chat_id", -1003117136623))
+TWITCH_CHANNEL = str(config.get("twitch", {}).get("channel", "")).replace("#", "").strip()
+TWITCH_CHAT_URL = f"https://www.twitch.tv/popout/{TWITCH_CHANNEL}/chat?popout=" if TWITCH_CHANNEL else ""
 
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 db = Database(config["database"]["db_path"])
+
+withdraw_sessions: dict[int, dict] = {}
+admin_reason_wait: dict[int, dict] = {}
+admin_check_sessions: dict[int, dict] = {}
+
+BOT_USERNAME: str | None = None
+GOLD_RE = re.compile(r"^\s*(\d+)\s*GOLD\s*$", re.IGNORECASE)
 
 
 def generate_code(length: int = 6) -> str:
@@ -41,6 +52,8 @@ def menu_kb(is_admin: bool, is_linked: bool = False):
         kb.row(InlineKeyboardButton(text="🔗 Привязать Twitch", callback_data="link"))
         
     kb.row(InlineKeyboardButton(text="ℹ️ Помощь", callback_data="help"))
+    kb.row(InlineKeyboardButton(text="💸 Вывод", callback_data="withdraw"))
+    kb.row(InlineKeyboardButton(text="💰 Баланс GOLD", callback_data="balance"))
     
     if is_admin:
         kb.row(InlineKeyboardButton(text="🛡 Админ-панель", callback_data="admin"))
@@ -59,25 +72,21 @@ def admin_kb():
         InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
         InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast"),
     )
+    kb.row(
+        InlineKeyboardButton(text="🧾 Чеки GOLD", callback_data="admin_checks"),
+        InlineKeyboardButton(text="📣 Каналы чеков", callback_data="admin_check_channels"),
+    )
+    kb.row(InlineKeyboardButton(text="⚡ Мгновенный розыгрыш", callback_data="admin_instant_giveaway"))
     kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="menu"))
     return kb.as_markup()
 
-
-@dp.message(Command("start"))
-async def cmd_start(message: Message):
-    is_admin = message.from_user.id in ADMIN_IDS
-    user = await db.get_telegram_user(message.from_user.id)
-    is_linked = user is not None and user.get("twitch_username") is not None
-
-    text = (
-        "👋 Привет! Я Telegram-бот для дропов на Twitch.\n\n"
-        "🤖 <b>Что умею:</b>\n"
-        "- 🔗 привязка Twitch к Telegram\n"
-        "- 📊 профиль и статистика\n"
-        "- 🔔 уведомления о старте/конце стрима и наградах\n\n"
-        "Нажми кнопку ниже."
-    )
-    await message.answer(text, reply_markup=menu_kb(is_admin, is_linked), parse_mode="HTML")
+async def get_bot_username() -> str:
+    global BOT_USERNAME
+    if BOT_USERNAME:
+        return BOT_USERNAME
+    me = await bot.get_me()
+    BOT_USERNAME = me.username
+    return BOT_USERNAME
 
 
 @dp.callback_query(F.data == "menu")
@@ -114,6 +123,8 @@ async def cb_link(query: CallbackQuery):
         "Отправь в чат Twitch команду:\n"
         f"<code>!link {code}</code>"
     )
+    if TWITCH_CHAT_URL:
+        text += f"\n\nСсылка на чат Twitch: <a href=\"{TWITCH_CHAT_URL}\">{TWITCH_CHANNEL}</a>"
     await query.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
     await query.answer()
 
@@ -130,13 +141,27 @@ async def cb_profile(query: CallbackQuery):
         return
 
     stats = await db.get_user_stats(user["twitch_username"])
+    balance = await db.get_gold_balance(query.from_user.id)
     text = (
         f"👤 <b>Профиль</b>\n\n"
         f"🟣 Twitch: <b>{user['twitch_username']}</b>\n"
-        f"🏆 Побед: <b>{stats['wins']}</b>"
+        f"🏆 Побед: <b>{stats['wins']}</b>\n"
+        f"💰 GOLD: <b>{balance}</b>"
     )
     if stats.get("last_win"):
         text += f"\n🕒 Последний выигрыш: {stats['last_win'][1]}"
+    await query.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data == "balance")
+async def cb_balance(query: CallbackQuery):
+    balance = await db.get_gold_balance(query.from_user.id)
+    text = (
+        "💰 <b>Баланс GOLD</b>\n\n"
+        f"Текущий баланс: <b>{balance}</b>\n\n"
+        "Чеки можно активировать кнопкой в канале."
+    )
     await query.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
     await query.answer()
 
@@ -148,6 +173,23 @@ async def cb_admin(query: CallbackQuery):
         return
     await query.message.edit_text("🛡 Админ-панель:", reply_markup=admin_kb())
     await query.answer()
+
+
+@dp.callback_query(F.data == "admin_instant_giveaway")
+async def cb_admin_instant_giveaway(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    trigger_id = await db.create_giveaway_trigger(query.from_user.id)
+    await query.answer("Запрос отправлен", show_alert=True)
+    try:
+        await query.message.edit_text(
+            f"⚡ Запрошен мгновенный розыгрыш. ID: <code>{trigger_id}</code>",
+            reply_markup=admin_kb(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
 
 @dp.callback_query(F.data == "admin_stats")
@@ -205,6 +247,525 @@ async def cmd_broadcast(message: Message):
     await message.answer(f"Отправлено: {sent}")
 
 
+def withdraw_admin_kb(withdrawal_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"wd:ok:{withdrawal_id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"wd:rej:{withdrawal_id}"),
+    )
+    kb.row(InlineKeyboardButton(text="🗑 Отклонить и списать", callback_data=f"wd:rejw:{withdrawal_id}"))
+    return kb.as_markup()
+
+def withdrawal_caption(withdrawal: dict, status_line: str | None = None) -> str:
+    tg_id = int(withdrawal["telegram_id"])
+    username = (withdrawal.get("telegram_username") or "").strip()
+    user_label = f"@{username}" if username else str(tg_id)
+    base = (
+        "Новая заявка на вывод\n\n"
+        f"Пользователь: <a href=\"tg://user?id={tg_id}\">{user_label}</a>\n"
+        f"Предмет: {withdrawal.get('item_name')}\n"
+        f"Цена: {withdrawal.get('price')}\n"
+        f"Паттерн: {withdrawal.get('pattern')}\n"
+        f"ID: {withdrawal.get('id')}"
+    )
+    if status_line:
+        return base + "\n\n" + status_line
+    return base
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: Message):
+    withdraw_sessions.pop(message.from_user.id, None)
+    admin_reason_wait.pop(message.from_user.id, None)
+    admin_check_sessions.pop(message.from_user.id, None)
+    await message.answer("Отменено.")
+
+
+@dp.callback_query(F.data == "withdraw")
+async def cb_withdraw(query: CallbackQuery):
+    withdraw_sessions[query.from_user.id] = {"stage": "photo"}
+    text = (
+        "Заявка на вывод\n\n"
+        "Отправь скриншот выставленного предмета \"G22 flock\" на рынке.\n\n"
+        "Отмена: /cancel"
+    )
+    await query.message.edit_text(text, reply_markup=back_kb())
+    await query.answer()
+
+
+@dp.message(F.chat.type == "private", F.photo)
+async def withdraw_photo(message: Message):
+    session = withdraw_sessions.get(message.from_user.id)
+    if not session or session.get("stage") != "photo":
+        return
+    session["photo_id"] = message.photo[-1].file_id
+    session["stage"] = "price"
+    await message.answer("Укажи цену лота числом. Пример: 123 или 123.45")
+
+
+@dp.message(F.chat.type == "private", F.text)
+async def withdraw_text(message: Message):
+    session = withdraw_sessions.get(message.from_user.id)
+    if not session:
+        return
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        return
+
+    if session.get("stage") == "price":
+        raw = text.replace(",", ".").strip()
+        try:
+            float(raw)
+        except Exception:
+            await message.answer("Цена должна быть числом. Пример: 123.45")
+            return
+        session["price"] = raw
+        session["stage"] = "pattern"
+        await message.answer("Укажи паттерн.")
+        return
+
+    if session.get("stage") == "pattern":
+        pattern = text
+        withdrawal_id = await db.create_withdrawal(
+            telegram_id=message.from_user.id,
+            telegram_username=message.from_user.username or "",
+            item_name="G22 flock",
+            photo_file_id=session.get("photo_id"),
+            price=session.get("price"),
+            pattern=pattern,
+        )
+        withdrawal = await db.get_withdrawal(withdrawal_id)
+        caption = withdrawal_caption(withdrawal)
+        try:
+            admin_msg = await bot.send_photo(
+                ADMIN_CHAT_ID,
+                withdrawal.get("photo_file_id"),
+                caption=caption,
+                reply_markup=withdraw_admin_kb(withdrawal_id),
+                parse_mode="HTML",
+            )
+        except Exception:
+            await db.delete_withdrawal(withdrawal_id)
+            await message.answer("Не удалось отправить заявку в админ-чат. Попробуй позже.")
+            withdraw_sessions.pop(message.from_user.id, None)
+            return
+
+        await db.set_withdrawal_admin_message(
+            withdrawal_id=withdrawal_id,
+            admin_chat_id=admin_msg.chat.id,
+            admin_message_id=admin_msg.message_id,
+        )
+        withdraw_sessions.pop(message.from_user.id, None)
+        await message.answer("Заявка отправлена. Ожидай решения админа.")
+        return
+
+
+@dp.callback_query(F.data.startswith("wd:"))
+async def cb_withdraw_admin_action(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    action = parts[1]
+    try:
+        withdrawal_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    withdrawal = await db.get_withdrawal(withdrawal_id)
+    if not withdrawal:
+        await query.answer("Заявка не найдена", show_alert=True)
+        return
+
+    if action == "ok":
+        saved = await db.decide_withdrawal(withdrawal_id, "approved", query.from_user.id)
+        if not saved:
+            await query.answer("Уже обработано", show_alert=True)
+            return
+        try:
+            await bot.send_message(int(withdrawal["telegram_id"]), "✅ Вывод сделан.")
+        except Exception:
+            pass
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=int(withdrawal["admin_chat_id"]),
+                message_id=int(withdrawal["admin_message_id"]),
+                reply_markup=None,
+            )
+            await bot.edit_message_caption(
+                chat_id=int(withdrawal["admin_chat_id"]),
+                message_id=int(withdrawal["admin_message_id"]),
+                caption=withdrawal_caption(withdrawal, "Статус: ✅ Одобрено"),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        await query.answer("Одобрено")
+        return
+
+    if action in ("rej", "rejw"):
+        if withdrawal.get("status") != "pending":
+            await query.answer("Уже обработано", show_alert=True)
+            return
+        admin_reason_wait[query.from_user.id] = {"withdrawal_id": withdrawal_id, "action": action}
+        await query.message.answer(f"Напиши причину для заявки ID {withdrawal_id} одним сообщением.")
+        await query.answer("Жду причину")
+        return
+
+    await query.answer("Неизвестное действие", show_alert=True)
+
+
+@dp.message(F.chat.id == ADMIN_CHAT_ID, F.text)
+async def withdraw_admin_reason(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    wait = admin_reason_wait.get(message.from_user.id)
+    if not wait:
+        return
+    withdrawal_id = int(wait["withdrawal_id"])
+    action = wait["action"]
+    withdrawal = await db.get_withdrawal(withdrawal_id)
+    if not withdrawal:
+        admin_reason_wait.pop(message.from_user.id, None)
+        await message.reply("Заявка не найдена или уже обработана.")
+        return
+    if withdrawal.get("status") != "pending":
+        admin_reason_wait.pop(message.from_user.id, None)
+        await message.reply("Заявка уже обработана.")
+        return
+
+    reason = (message.text or "").strip()
+    if not reason:
+        await message.reply("Причина не должна быть пустой.")
+        return
+
+    if action == "rej":
+        saved = await db.decide_withdrawal(
+            withdrawal_id,
+            "rejected_refund",
+            message.from_user.id,
+            reason=reason,
+        )
+        if not saved:
+            admin_reason_wait.pop(message.from_user.id, None)
+            await message.reply("Заявка уже обработана.")
+            return
+        user_text = (
+            "❌ Заявка на вывод отклонена.\n"
+            f"Причина: {reason}\n"
+            "Возврат на аккаунт выполнен."
+        )
+        status = f"Статус: ❌ Отклонено\nПричина: {reason}\nДействие: Возврат на аккаунт"
+    else:
+        saved = await db.decide_withdrawal(
+            withdrawal_id,
+            "rejected_writeoff",
+            message.from_user.id,
+            reason=reason,
+        )
+        if not saved:
+            admin_reason_wait.pop(message.from_user.id, None)
+            await message.reply("Заявка уже обработана.")
+            return
+        user_text = (
+            "❌ Заявка на вывод отклонена.\n"
+            f"Причина: {reason}\n"
+            "Возврат не выполняется."
+        )
+        status = f"Статус: 🗑 Отклонено и списано\nПричина: {reason}"
+
+    try:
+        await bot.send_message(int(withdrawal["telegram_id"]), user_text)
+    except Exception:
+        pass
+
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=int(withdrawal["admin_chat_id"]),
+            message_id=int(withdrawal["admin_message_id"]),
+            reply_markup=None,
+        )
+        await bot.edit_message_caption(
+            chat_id=int(withdrawal["admin_chat_id"]),
+            message_id=int(withdrawal["admin_message_id"]),
+            caption=withdrawal_caption(withdrawal, status),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    admin_reason_wait.pop(message.from_user.id, None)
+    await message.reply("Готово.")
+
+
+def check_channel_kb(channels: list[dict]):
+    kb = InlineKeyboardBuilder()
+    for ch in channels:
+        title = (ch.get("title") or "").strip()
+        label = title if title else str(ch["chat_id"])
+        kb.row(InlineKeyboardButton(text=label, callback_data=f"check_post:{ch['chat_id']}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin"))
+    return kb.as_markup()
+
+
+def check_admin_menu_kb():
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="➕ Создать чек", callback_data="check_create"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin"))
+    return kb.as_markup()
+
+
+def check_channels_menu_kb():
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin"))
+    return kb.as_markup()
+
+
+def check_message_text(amount: int, max_activations: int, activated_count: int) -> str:
+    return (
+        f"🧾 Новый чек на {amount} GOLD\n"
+        f"🔁 Активаций: {max_activations}\n"
+        f"✅ Активировано: {activated_count}"
+    )
+
+
+def check_activate_kb(bot_username: str, code: str):
+    url = f"https://t.me/{bot_username}?start=check_{code}"
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Активировать", url=url))
+    return kb.as_markup()
+
+
+@dp.callback_query(F.data == "admin_checks")
+async def cb_admin_checks(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    text = (
+        "🧾 <b>Чеки GOLD</b>\n\n"
+        "Создание: нажми «Создать чек», затем отправь: <code>N M</code>\n"
+        "где N — сумма GOLD, M — кол-во активаций.\n\n"
+        "Отмена: /cancel"
+    )
+    await query.message.edit_text(text, reply_markup=check_admin_menu_kb(), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data == "check_create")
+async def cb_check_create(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    admin_check_sessions[query.from_user.id] = {"stage": "params"}
+    await query.message.edit_text(
+        "Отправь параметры чека сообщением: <code>N M</code>\n\nОтмена: /cancel",
+        reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_checks")).as_markup(),
+        parse_mode="HTML",
+    )
+    await query.answer()
+
+
+@dp.callback_query(F.data == "admin_check_channels")
+async def cb_admin_check_channels(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    channels = await db.list_check_channels()
+    lines = ["📣 <b>Каналы для чеков</b>\n"]
+    if not channels:
+        lines.append("Список пуст.\n")
+    else:
+        for ch in channels:
+            title = (ch.get("title") or "").strip()
+            label = title if title else str(ch["chat_id"])
+            lines.append(f"- {label} (<code>{ch['chat_id']}</code>)")
+        lines.append("")
+    lines.append("Добавить: <code>/add_check_channel CHAT_ID Название</code>")
+    lines.append("Удалить: <code>/del_check_channel CHAT_ID</code>")
+    await query.message.edit_text("\n".join(lines), reply_markup=check_channels_menu_kb(), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.message(Command("add_check_channel"))
+async def cmd_add_check_channel(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2:
+        await message.answer("Пример: /add_check_channel -1001234567890 Мой канал")
+        return
+    try:
+        chat_id = int(parts[1])
+    except Exception:
+        await message.answer("CHAT_ID должен быть числом. Пример: -1001234567890")
+        return
+    title = parts[2].strip() if len(parts) >= 3 else ""
+    await db.add_check_channel(chat_id, title)
+    await message.answer("Канал добавлен.")
+
+
+@dp.message(Command("del_check_channel"))
+async def cmd_del_check_channel(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Пример: /del_check_channel -1001234567890")
+        return
+    try:
+        chat_id = int(parts[1])
+    except Exception:
+        await message.answer("CHAT_ID должен быть числом.")
+        return
+    await db.remove_check_channel(chat_id)
+    await message.answer("Канал удалён.")
+
+
+@dp.message(F.chat.type == "private", F.text)
+async def admin_check_flow(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    sess = admin_check_sessions.get(message.from_user.id)
+    if not sess:
+        return
+    if (message.text or "").startswith("/"):
+        return
+    if sess.get("stage") != "params":
+        return
+
+    parts = (message.text or "").strip().split()
+    if len(parts) != 2:
+        await message.answer("Нужно два числа: <code>N M</code>", parse_mode="HTML")
+        return
+    try:
+        amount = int(parts[0])
+        max_activations = int(parts[1])
+    except Exception:
+        await message.answer("N и M должны быть числами. Пример: <code>100 5</code>", parse_mode="HTML")
+        return
+    if amount <= 0 or max_activations <= 0:
+        await message.answer("N и M должны быть больше 0.")
+        return
+    sess["amount"] = amount
+    sess["max_activations"] = max_activations
+    sess["stage"] = "channel"
+    channels = await db.list_check_channels()
+    if not channels:
+        await message.answer("Сначала добавь канал: /add_check_channel CHAT_ID Название")
+        admin_check_sessions.pop(message.from_user.id, None)
+        return
+    await message.answer("Выбери канал для публикации чека:", reply_markup=check_channel_kb(channels))
+
+
+@dp.callback_query(F.data.startswith("check_post:"))
+async def cb_check_post(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    sess = admin_check_sessions.get(query.from_user.id)
+    if not sess or sess.get("stage") != "channel":
+        await query.answer("Сначала создай чек", show_alert=True)
+        return
+    try:
+        channel_id = int((query.data or "").split(":", 1)[1])
+    except Exception:
+        await query.answer("Некорректный канал", show_alert=True)
+        return
+
+    amount = int(sess["amount"])
+    max_activations = int(sess["max_activations"])
+    code = generate_code(16)
+    bot_username = await get_bot_username()
+
+    check_id = await db.create_gold_check(amount, max_activations, query.from_user.id, channel_id, code)
+    text = check_message_text(amount, max_activations, 0)
+    try:
+        msg = await bot.send_message(
+            channel_id,
+            text,
+            reply_markup=check_activate_kb(bot_username, code),
+        )
+    except Exception:
+        await query.message.answer("Не удалось отправить сообщение в канал. Проверь права бота в канале.")
+        admin_check_sessions.pop(query.from_user.id, None)
+        await query.answer()
+        return
+
+    await db.set_gold_check_message(check_id, msg.message_id)
+    admin_check_sessions.pop(query.from_user.id, None)
+    await query.message.answer(f"Чек создан и опубликован в канале {channel_id}. ID: {check_id}")
+    await query.answer("Опубликовано")
+
+
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    payload = ""
+    if message.text and " " in message.text:
+        payload = message.text.split(" ", 1)[1].strip()
+    if payload.startswith("check_"):
+        code = payload.replace("check_", "", 1).strip()
+        user = await db.get_telegram_user(message.from_user.id)
+        if not user or not user.get("twitch_username"):
+            kb = InlineKeyboardBuilder()
+            kb.row(InlineKeyboardButton(text="🔗 Привязать Twitch", callback_data="link"))
+            if TWITCH_CHAT_URL:
+                text = (
+                    "Чтобы активировать чек, сначала привяжи Twitch.\n\n"
+                    f"Ссылка на чат Twitch: <a href=\"{TWITCH_CHAT_URL}\">{TWITCH_CHANNEL}</a>"
+                )
+                await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+            else:
+                await message.answer("Чтобы активировать чек, сначала привяжи Twitch.", reply_markup=kb.as_markup())
+            return
+        result = await db.activate_gold_check(code, message.from_user.id)
+        if result.get("status") == "activated":
+            balance = await db.get_gold_balance(message.from_user.id)
+            await message.answer(f"✅ Чек активирован: +{result['amount']} GOLD\n💰 Баланс: {balance}")
+            try:
+                bot_username = await get_bot_username()
+                await bot.edit_message_text(
+                    chat_id=int(result["channel_id"]),
+                    message_id=int(result["message_id"]),
+                    text=check_message_text(
+                        int(result["amount"]),
+                        int(result["max_activations"]),
+                        int(result["activated_count"]),
+                    ),
+                    reply_markup=check_activate_kb(bot_username, code),
+                )
+            except Exception:
+                pass
+            return
+        if result.get("status") == "already":
+            await message.answer("Ты уже активировал этот чек.")
+            return
+        if result.get("status") == "finished":
+            await message.answer("Этот чек уже закончился.")
+            return
+        if result.get("status") == "inactive":
+            await message.answer("Этот чек больше не активен.")
+            return
+        await message.answer("Чек не найден.")
+        return
+
+    is_admin = message.from_user.id in ADMIN_IDS
+    user = await db.get_telegram_user(message.from_user.id)
+    is_linked = user is not None and user.get("twitch_username") is not None
+
+    text = (
+        "👋 Привет! Я Telegram-бот для дропов на Twitch.\n\n"
+        "🤖 <b>Что умею:</b>\n"
+        "- 🔗 привязка Twitch к Telegram\n"
+        "- 📊 профиль и статистика\n"
+        "- 🔔 уведомления о старте/конце стрима и наградах\n\n"
+        "Нажми кнопку ниже."
+    )
+    await message.answer(text, reply_markup=menu_kb(is_admin, is_linked), parse_mode="HTML")
+
+
 async def start_telegram_bot():
     await db.init()
     await dp.start_polling(bot)
@@ -215,4 +776,3 @@ async def notify_user(telegram_id: int, text: str):
         await bot.send_message(telegram_id, text)
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение в TG {telegram_id}: {e}")
-

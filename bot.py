@@ -4,6 +4,7 @@ import asyncio
 import random
 import datetime
 import logging
+import re
 import aiosqlite
 from db import Database
 from telegram_bot import notify_user
@@ -11,6 +12,8 @@ from twitch_helix import HelixClient
 
 
 logger = logging.getLogger("TwitchBot")
+
+GOLD_RE = re.compile(r"^\s*(\d+)\s*GOLD\s*$", re.IGNORECASE)
 
 
 class TwitchBot(commands.Bot):
@@ -121,6 +124,7 @@ class TwitchBot(commands.Bot):
             self._tasks.append(asyncio.create_task(self.stream_check_loop()))
             self._tasks.append(asyncio.create_task(self.giveaway_loop()))
             self._tasks.append(asyncio.create_task(self.expire_loop()))
+            self._tasks.append(asyncio.create_task(self.instant_giveaway_loop()))
 
     @commands.command(name="ping")
     async def cmd_ping(self, ctx: commands.Context):
@@ -266,11 +270,30 @@ class TwitchBot(commands.Bot):
 
         telegram_id = await self.db.get_telegram_id_by_twitch_username(username)
         if telegram_id:
-            if len(rows) == 1:
-                await notify_user(telegram_id, f"🎁 Награда подтверждена: {rows[0][1]}.")
-            else:
-                rewards_list = "\n- " + "\n- ".join([r[1] for r in rows])
-                await notify_user(telegram_id, f"🎁 Награды подтверждены:{rewards_list}")
+            total_gold = 0
+            items: list[str] = []
+            for draw_id, reward_name in rows:
+                m = GOLD_RE.match(reward_name or "")
+                if m:
+                    amount = int(m.group(1))
+                    credited = await self.db.credit_gold_once(int(telegram_id), amount, "draw", int(draw_id))
+                    if credited:
+                        total_gold += amount
+                else:
+                    items.append(reward_name)
+
+            parts: list[str] = []
+            if total_gold > 0:
+                parts.append(f"💰 Начислено: {total_gold} GOLD")
+            if items:
+                if len(items) == 1:
+                    parts.append(f"🎁 Награда подтверждена: {items[0]}.")
+                else:
+                    rewards_list = "\n- " + "\n- ".join(items)
+                    parts.append(f"🎁 Награды подтверждены:{rewards_list}")
+            if not parts:
+                parts.append("✅ Награда подтверждена.")
+            await notify_user(int(telegram_id), "\n\n".join(parts))
 
     async def stream_check_loop(self):
         await self.wait_for_ready()
@@ -316,6 +339,21 @@ class TwitchBot(commands.Bot):
             except Exception as e:
                 logger.error(f"Ошибка цикла розыгрышей: {e}")
                 await asyncio.sleep(5)
+
+    async def instant_giveaway_loop(self):
+        await self.wait_for_ready()
+        while True:
+            try:
+                trigger = await self.db.claim_giveaway_trigger()
+                if trigger:
+                    logger.info(f"Мгновенный розыгрыш запрошен: id={trigger['id']} by={trigger['requested_by']}")
+                    await self.run_giveaway()
+                await asyncio.sleep(3)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Ошибка мгновенного розыгрыша: {e}")
+                await asyncio.sleep(3)
 
     async def expire_loop(self):
         await self.wait_for_ready()

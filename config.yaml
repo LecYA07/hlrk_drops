@@ -12,6 +12,7 @@ telegram:
     - 1257964240
     - 857159341
     - 232558076 # Add your Telegram ID here
+  admin_chat_id: "-1003117136623"
 
 giveaway:
   min_interval_minutes: 10
