@@ -240,3 +240,23 @@ AttributeError: 'TwitchBot' object has no attribute 'nick'
 2026-02-19 08:16:45,087 - aiogram.dispatcher - INFO - Polling stopped
 2026-02-19 08:16:45,088 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
 2026-02-19 08:16:45,091 - root - INFO - Bot stopped by user.
+2026-02-19 12:18:28,288 - Database - INFO - Database initialized.
+2026-02-19 12:18:28,292 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 12:18:28,326 - Database - INFO - Database initialized.
+2026-02-19 12:18:28,326 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 12:18:29,377 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 12:18:29,574 - root - ERROR - Error in main loop: Invalid or unauthorized Access Token passed.
+2026-02-19 12:18:29,574 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 12:18:29,599 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 12:21:44,477 - Database - INFO - Database initialized.
+2026-02-19 12:21:44,481 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 12:21:44,532 - Database - INFO - Database initialized.
+2026-02-19 12:21:44,534 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 12:21:45,450 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 12:21:47,137 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 12:21:47,170 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 12:21:47,171 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 12:21:48,437 - Helix - INFO - Helix: app access token получен
+2026-02-19 12:21:52,353 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 12:21:52,356 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 12:21:52,359 - root - INFO - Bot stopped by user.
