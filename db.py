@@ -151,10 +151,56 @@ class Database:
                 )
             ''')
 
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS planned_giveaways (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reward_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    winners_count INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'planned',
+                    created_by INTEGER,
+                    created_at DATETIME,
+                    triggered_at DATETIME,
+                    FOREIGN KEY(reward_id) REFERENCES rewards(id)
+                )
+            ''')
+
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS item_claims (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    draw_id INTEGER UNIQUE,
+                    telegram_id INTEGER NOT NULL,
+                    twitch_username TEXT,
+                    reward_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'available',
+                    claimed_at DATETIME
+                )
+            ''')
+
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS conversion_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER NOT NULL,
+                    telegram_username TEXT,
+                    draw_id INTEGER NOT NULL,
+                    reward_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    requested_at DATETIME,
+                    decided_at DATETIME,
+                    admin_id INTEGER,
+                    gold_amount INTEGER,
+                    reason TEXT,
+                    admin_chat_id INTEGER,
+                    admin_message_id INTEGER,
+                    UNIQUE(draw_id)
+                )
+            ''')
+
             # Migrations
             await self.migrate_draws_table(db)
             await self.migrate_withdrawals_table(db)
             await self.migrate_gold_tables(db)
+            await self.migrate_giveaway_triggers_table(db)
             
             await db.commit()
             logger.info("Database initialized.")
@@ -200,6 +246,23 @@ class Database:
             columns = [row[1] for row in await cursor.fetchall()]
         if columns and "updated_at" not in columns:
             await db.execute("ALTER TABLE gold_balances ADD COLUMN updated_at DATETIME")
+
+    async def migrate_giveaway_triggers_table(self, db):
+        async with db.execute("PRAGMA table_info(giveaway_triggers)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+
+        if not columns:
+            return
+
+        required = {
+            "trigger_type": "ALTER TABLE giveaway_triggers ADD COLUMN trigger_type TEXT DEFAULT 'random'",
+            "reward_id": "ALTER TABLE giveaway_triggers ADD COLUMN reward_id INTEGER",
+            "winners_count": "ALTER TABLE giveaway_triggers ADD COLUMN winners_count INTEGER",
+            "planned_giveaway_id": "ALTER TABLE giveaway_triggers ADD COLUMN planned_giveaway_id INTEGER",
+        }
+        for col, sql in required.items():
+            if col not in columns:
+                await db.execute(sql)
 
     async def get_telegram_user(self, telegram_id):
         async with aiosqlite.connect(self.db_path) as db:
@@ -330,6 +393,357 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("SELECT COUNT(*) FROM draws") as cursor:
                 return (await cursor.fetchone())[0]
+
+    async def create_reward(
+        self,
+        name: str,
+        description: str = "",
+        weight: int = 0,
+        quantity: int = 1,
+        enabled: int = 0,
+    ) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                """
+                INSERT INTO rewards (name, description, weight, quantity, enabled)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (name, description, int(weight), int(quantity), int(enabled)),
+            )
+            await db.commit()
+            return int(cur.lastrowid)
+
+    async def get_reward(self, reward_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT id, name, description, weight, quantity, enabled FROM rewards WHERE id = ?",
+                (reward_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": int(row[0]),
+                    "name": row[1],
+                    "description": row[2] or "",
+                    "weight": int(row[3]) if row[3] is not None else 0,
+                    "quantity": int(row[4]) if row[4] is not None else 1,
+                    "enabled": int(row[5]) if row[5] is not None else 0,
+                }
+
+    async def create_planned_giveaway(self, title: str, winners_count: int, created_by: int) -> int:
+        title = (title or "").strip()
+        winners_count = int(winners_count)
+        if not title or winners_count <= 0:
+            raise ValueError("bad planned giveaway")
+        reward_id = await self.create_reward(
+            name=title,
+            description="planned_giveaway",
+            weight=0,
+            quantity=winners_count,
+            enabled=0,
+        )
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now()
+            cur = await db.execute(
+                """
+                INSERT INTO planned_giveaways (reward_id, title, winners_count, status, created_by, created_at)
+                VALUES (?, ?, ?, 'planned', ?, ?)
+                """,
+                (reward_id, title, winners_count, created_by, now),
+            )
+            await db.commit()
+            return int(cur.lastrowid)
+
+    async def list_planned_giveaways(self, status: str | None = None) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            if status:
+                async with db.execute(
+                    """
+                    SELECT id, reward_id, title, winners_count, status, created_at, triggered_at
+                    FROM planned_giveaways
+                    WHERE status = ?
+                    ORDER BY id DESC
+                    """,
+                    (status,),
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            else:
+                async with db.execute(
+                    """
+                    SELECT id, reward_id, title, winners_count, status, created_at, triggered_at
+                    FROM planned_giveaways
+                    ORDER BY id DESC
+                    """
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            return [
+                {
+                    "id": int(r[0]),
+                    "reward_id": int(r[1]),
+                    "title": r[2],
+                    "winners_count": int(r[3]),
+                    "status": r[4],
+                    "created_at": r[5],
+                    "triggered_at": r[6],
+                }
+                for r in rows
+            ]
+
+    async def mark_planned_giveaway_triggered(self, planned_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now()
+            await db.execute(
+                "UPDATE planned_giveaways SET status = 'triggered', triggered_at = ? WHERE id = ? AND status = 'planned'",
+                (now, planned_id),
+            )
+            await db.commit()
+
+    async def set_planned_giveaway_status(self, planned_id: int, status: str) -> bool:
+        status = (status or "").strip()
+        if status not in ("planned", "end", "triggered"):
+            return False
+        async with aiosqlite.connect(self.db_path) as db:
+            if status == "triggered":
+                now = datetime.datetime.now()
+                await db.execute(
+                    "UPDATE planned_giveaways SET status = 'triggered', triggered_at = ? WHERE id = ?",
+                    (now, int(planned_id)),
+                )
+            else:
+                await db.execute(
+                    "UPDATE planned_giveaways SET status = ? WHERE id = ?",
+                    (status, int(planned_id)),
+                )
+            await db.commit()
+            return True
+
+    async def create_planned_giveaway_trigger(self, planned_giveaway_id: int, requested_by: int) -> int:
+        planned_giveaway_id = int(planned_giveaway_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT reward_id, winners_count, status FROM planned_giveaways WHERE id = ?",
+                (planned_giveaway_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row or (row[2] != "planned" and row[2] != "triggered"):
+                raise ValueError("planned giveaway not found")
+            reward_id = int(row[0])
+            winners_count = int(row[1])
+            now = datetime.datetime.now()
+            cur = await db.execute(
+                """
+                INSERT INTO giveaway_triggers
+                    (requested_by, created_at, trigger_type, reward_id, winners_count, planned_giveaway_id)
+                VALUES
+                    (?, ?, 'planned', ?, ?, ?)
+                """,
+                (requested_by, now, reward_id, winners_count, planned_giveaway_id),
+            )
+            await db.commit()
+            return int(cur.lastrowid)
+
+    async def record_item_claim(self, draw_id: int, telegram_id: int, twitch_username: str, reward_name: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now()
+            await db.execute(
+                """
+                INSERT INTO item_claims (draw_id, telegram_id, twitch_username, reward_name, status, claimed_at)
+                VALUES (?, ?, ?, ?, 'available', ?)
+                ON CONFLICT(draw_id) DO NOTHING
+                """,
+                (int(draw_id), int(telegram_id), twitch_username, reward_name, now),
+            )
+            await db.commit()
+
+    async def list_available_item_claims(self, telegram_id: int) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                SELECT draw_id, reward_name, claimed_at
+                FROM item_claims
+                WHERE telegram_id = ? AND status = 'available'
+                ORDER BY id DESC
+                """,
+                (int(telegram_id),),
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [{"draw_id": int(r[0]), "reward_name": r[1], "claimed_at": r[2]} for r in rows]
+
+    async def create_conversion_request(self, telegram_id: int, telegram_username: str, draw_id: int) -> int | None:
+        telegram_id = int(telegram_id)
+        draw_id = int(draw_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now()
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT reward_name, status FROM item_claims WHERE draw_id = ? AND telegram_id = ?",
+                (draw_id, telegram_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row or row[1] != "available":
+                await db.execute("ROLLBACK")
+                return None
+            reward_name = row[0]
+            await db.execute(
+                "UPDATE item_claims SET status = 'conversion_pending' WHERE draw_id = ? AND telegram_id = ?",
+                (draw_id, telegram_id),
+            )
+            try:
+                cur = await db.execute(
+                    """
+                    INSERT INTO conversion_requests
+                        (telegram_id, telegram_username, draw_id, reward_name, status, requested_at)
+                    VALUES
+                        (?, ?, ?, ?, 'pending', ?)
+                    """,
+                    (telegram_id, telegram_username, draw_id, reward_name, now),
+                )
+            except aiosqlite.IntegrityError:
+                await db.execute("ROLLBACK")
+                return None
+            await db.execute("COMMIT")
+            return int(cur.lastrowid)
+
+    async def get_conversion_request(self, request_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT * FROM conversion_requests WHERE id = ?",
+                (int(request_id),),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if not row:
+                    return None
+                return {
+                    "id": int(row[0]),
+                    "telegram_id": int(row[1]),
+                    "telegram_username": row[2] or "",
+                    "draw_id": int(row[3]),
+                    "reward_name": row[4],
+                    "status": row[5],
+                    "requested_at": row[6],
+                    "decided_at": row[7],
+                    "admin_id": row[8],
+                    "gold_amount": row[9],
+                    "reason": row[10],
+                    "admin_chat_id": row[11],
+                    "admin_message_id": row[12],
+                }
+
+    async def set_conversion_admin_message(self, request_id: int, admin_chat_id: int, admin_message_id: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE conversion_requests
+                SET admin_chat_id = ?, admin_message_id = ?
+                WHERE id = ?
+                """,
+                (int(admin_chat_id), int(admin_message_id), int(request_id)),
+            )
+            await db.commit()
+
+    async def decide_conversion(
+        self,
+        request_id: int,
+        status: str,
+        admin_id: int,
+        gold_amount: int | None = None,
+        reason: str | None = None,
+    ) -> bool:
+        request_id = int(request_id)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT status, draw_id, telegram_id FROM conversion_requests WHERE id = ?",
+                (request_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row or row[0] != "pending":
+                await db.execute("ROLLBACK")
+                return False
+            draw_id = int(row[1])
+            telegram_id = int(row[2])
+            now = datetime.datetime.now()
+            await db.execute(
+                """
+                UPDATE conversion_requests
+                SET status = ?, decided_at = ?, admin_id = ?, gold_amount = ?, reason = ?
+                WHERE id = ?
+                """,
+                (status, now, int(admin_id), gold_amount, reason, request_id),
+            )
+            if status == "credited":
+                await db.execute(
+                    "UPDATE item_claims SET status = 'converted' WHERE draw_id = ? AND telegram_id = ?",
+                    (draw_id, telegram_id),
+                )
+            else:
+                await db.execute(
+                    "UPDATE item_claims SET status = 'available' WHERE draw_id = ? AND telegram_id = ?",
+                    (draw_id, telegram_id),
+                )
+            await db.execute("COMMIT")
+            return True
+
+    async def credit_conversion_request(self, request_id: int, admin_id: int, gold_amount: int) -> dict:
+        request_id = int(request_id)
+        gold_amount = int(gold_amount)
+        if gold_amount <= 0:
+            return {"ok": False, "status": "bad_amount"}
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now()
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT status, draw_id, telegram_id FROM conversion_requests WHERE id = ?",
+                (request_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                await db.execute("ROLLBACK")
+                return {"ok": False, "status": "not_found"}
+            if row[0] != "pending":
+                await db.execute("ROLLBACK")
+                return {"ok": False, "status": "not_pending"}
+            draw_id = int(row[1])
+            telegram_id = int(row[2])
+
+            try:
+                await db.execute(
+                    """
+                    INSERT INTO gold_transactions (telegram_id, amount, source_type, source_id, created_at)
+                    VALUES (?, ?, 'conversion', ?, ?)
+                    """,
+                    (telegram_id, gold_amount, request_id, now),
+                )
+            except aiosqlite.IntegrityError:
+                await db.execute("ROLLBACK")
+                return {"ok": False, "status": "exists"}
+
+            await db.execute(
+                """
+                INSERT INTO gold_balances (telegram_id, balance, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    balance = balance + excluded.balance,
+                    updated_at = excluded.updated_at
+                """,
+                (telegram_id, gold_amount, now),
+            )
+
+            await db.execute(
+                """
+                UPDATE conversion_requests
+                SET status = 'credited', decided_at = ?, admin_id = ?, gold_amount = ?
+                WHERE id = ?
+                """,
+                (now, int(admin_id), gold_amount, request_id),
+            )
+            await db.execute(
+                "UPDATE item_claims SET status = 'converted' WHERE draw_id = ? AND telegram_id = ?",
+                (draw_id, telegram_id),
+            )
+            await db.execute("COMMIT")
+            return {"ok": True, "status": "credited", "telegram_id": telegram_id, "amount": gold_amount}
 
     async def create_withdrawal(
         self,
@@ -756,7 +1170,10 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             now = datetime.datetime.now()
             cur = await db.execute(
-                "INSERT INTO giveaway_triggers (requested_by, created_at) VALUES (?, ?)",
+                """
+                INSERT INTO giveaway_triggers (requested_by, created_at, trigger_type)
+                VALUES (?, ?, 'random')
+                """,
                 (requested_by, now),
             )
             await db.commit()
@@ -767,7 +1184,7 @@ class Database:
             await db.execute("BEGIN IMMEDIATE")
             async with db.execute(
                 """
-                SELECT id, requested_by
+                SELECT id, requested_by, trigger_type, reward_id, winners_count, planned_giveaway_id
                 FROM giveaway_triggers
                 WHERE processed_at IS NULL
                 ORDER BY id ASC
@@ -780,12 +1197,23 @@ class Database:
                 return None
             trigger_id = int(row[0])
             requested_by = int(row[1]) if row[1] is not None else 0
+            trigger_type = row[2] or "random"
+            reward_id = int(row[3]) if row[3] is not None else None
+            winners_count = int(row[4]) if row[4] is not None else None
+            planned_giveaway_id = int(row[5]) if row[5] is not None else None
             now = datetime.datetime.now()
             await db.execute(
                 "UPDATE giveaway_triggers SET processed_at = ? WHERE id = ? AND processed_at IS NULL",
                 (now, trigger_id),
             )
             await db.execute("COMMIT")
-            return {"id": trigger_id, "requested_by": requested_by}
+            return {
+                "id": trigger_id,
+                "requested_by": requested_by,
+                "trigger_type": trigger_type,
+                "reward_id": reward_id,
+                "winners_count": winners_count,
+                "planned_giveaway_id": planned_giveaway_id,
+            }
 
 # Load config to instantiate global DB if needed, but better to pass instance

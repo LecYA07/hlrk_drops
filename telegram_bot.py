@@ -36,6 +36,8 @@ db = Database(config["database"]["db_path"])
 withdraw_sessions: dict[int, dict] = {}
 admin_reason_wait: dict[int, dict] = {}
 admin_check_sessions: dict[int, dict] = {}
+admin_giveaway_sessions: dict[int, dict] = {}
+admin_conversion_wait: dict[int, dict] = {}
 
 BOT_USERNAME: str | None = None
 GOLD_RE = re.compile(r"^\s*(\d+)\s*GOLD\s*$", re.IGNORECASE)
@@ -84,6 +86,12 @@ def back_kb():
     kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="menu"))
     return kb.as_markup()
 
+def profile_kb():
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🔄 Конвертировать предмет", callback_data="convert_menu"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="menu"))
+    return kb.as_markup()
+
 
 def admin_kb():
     kb = InlineKeyboardBuilder()
@@ -95,6 +103,7 @@ def admin_kb():
         InlineKeyboardButton(text="🧾 Чеки GOLD", callback_data="admin_checks"),
         InlineKeyboardButton(text="📣 Каналы чеков", callback_data="admin_check_channels"),
     )
+    kb.row(InlineKeyboardButton(text="🎁 Розыгрыши на стрим", callback_data="admin_stream_giveaways"))
     kb.row(InlineKeyboardButton(text="⚡ Мгновенный розыгрыш", callback_data="admin_instant_giveaway"))
     kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="menu"))
     return kb.as_markup()
@@ -171,9 +180,215 @@ async def cb_profile(query: CallbackQuery):
     )
     if stats.get("last_win"):
         text += f"\n🎁 Последний выигрыш: <b>{stats['last_win'][1]}</b>\n🗓 {format_dt(stats['last_win'][0])}"
-    await query.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
+    await query.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
     await query.answer()
 
+def convert_items_kb(items: list[dict]):
+    kb = InlineKeyboardBuilder()
+    for it in items[:20]:
+        name = (it.get("reward_name") or "").strip()
+        draw_id = int(it["draw_id"])
+        label = name if len(name) <= 30 else (name[:27] + "…")
+        kb.row(InlineKeyboardButton(text=f"🔄 {label} (#{draw_id})", callback_data=f"convert:{draw_id}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="profile"))
+    return kb.as_markup()
+
+@dp.callback_query(F.data == "convert_menu")
+async def cb_convert_menu(query: CallbackQuery):
+    user = await db.get_telegram_user(query.from_user.id)
+    if not user or not user.get("twitch_username"):
+        await query.answer("Сначала привяжи Twitch", show_alert=True)
+        return
+    items = await db.list_available_item_claims(query.from_user.id)
+    if not items:
+        await query.message.edit_text("Пока нет предметов для конвертации.", reply_markup=back_kb())
+        await query.answer()
+        return
+    await query.message.edit_text(
+        "Выбери предмет, который нужно конвертировать в GOLD:",
+        reply_markup=convert_items_kb(items),
+    )
+    await query.answer()
+
+def conversion_admin_kb(request_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="✅ Начислить GOLD", callback_data=f"cv:credit:{request_id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"cv:rej:{request_id}"),
+    )
+    return kb.as_markup()
+
+@dp.callback_query(F.data.startswith("convert:"))
+async def cb_convert_pick(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 2:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        draw_id = int(parts[1])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+
+    request_id = await db.create_conversion_request(
+        telegram_id=query.from_user.id,
+        telegram_username=query.from_user.username or "",
+        draw_id=draw_id,
+    )
+    if not request_id:
+        await query.answer("Не получилось создать заявку", show_alert=True)
+        return
+
+    req = await db.get_conversion_request(int(request_id))
+    text = (
+        "🔄 <b>Конвертация предмета</b>\n\n"
+        f"👤 TG: @{query.from_user.username or '—'} (id <code>{query.from_user.id}</code>)\n"
+        f"🎁 Предмет: <b>{req['reward_name']}</b>\n"
+        f"🧾 Заявка: <code>{request_id}</code>\n"
+        f"📦 Draw ID: <code>{draw_id}</code>"
+    )
+    try:
+        admin_msg = await bot.send_message(
+            ADMIN_CHAT_ID,
+            text,
+            reply_markup=conversion_admin_kb(int(request_id)),
+            parse_mode="HTML",
+        )
+        await db.set_conversion_admin_message(int(request_id), admin_msg.chat.id, admin_msg.message_id)
+    except Exception:
+        await db.decide_conversion(int(request_id), "rejected", 0, reason="admin_chat_send_failed")
+        await query.answer("Не удалось отправить в админ-чат", show_alert=True)
+        return
+
+    await query.message.edit_text("Заявка на конвертацию отправлена. Ожидай решения админа.", reply_markup=back_kb())
+    await query.answer("Отправлено", show_alert=True)
+
+def stream_giveaways_kb(rows: list[dict]):
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="➕ Создать", callback_data="sg:create"))
+    kb.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stream_giveaways"))
+    for g in rows[:10]:
+        gid = int(g["id"])
+        status = g.get("status") or "planned"
+        title = (g.get("title") or "").strip()
+        label = title if len(title) <= 24 else (title[:21] + "…")
+        if status in ("planned", "end"):
+            kb.row(InlineKeyboardButton(text=f"▶️ Сейчас #{gid} ({label})", callback_data=f"sg:run:{gid}"))
+        if status == "planned":
+            kb.row(InlineKeyboardButton(text=f"🏁 В конец #{gid}", callback_data=f"sg:end:{gid}"))
+        if status == "end":
+            kb.row(InlineKeyboardButton(text=f"↩️ Убрать из конца #{gid}", callback_data=f"sg:plan:{gid}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin"))
+    return kb.as_markup()
+
+@dp.callback_query(F.data == "admin_stream_giveaways")
+async def cb_admin_stream_giveaways(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    rows = await db.list_planned_giveaways()
+    text = "🎁 <b>Розыгрыши на стрим</b>\n\n"
+    if not rows:
+        text += "Пока пусто."
+    else:
+        lines: list[str] = []
+        for g in rows[:10]:
+            status = g.get("status") or "planned"
+            lines.append(f"#{g['id']} — <b>{g['title']}</b> — победителей: {g['winners_count']} — {status}")
+        text += "\n".join(lines)
+    await query.message.edit_text(text, reply_markup=stream_giveaways_kb(rows), parse_mode="HTML")
+    await query.answer()
+
+@dp.callback_query(F.data == "sg:create")
+async def cb_sg_create(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    admin_giveaway_sessions[query.from_user.id] = {"stage": "create"}
+    await query.message.answer(
+        "Отправь одним сообщением:\n<code>Название | Кол-во победителей</code>\nПример: <code>AKR12 | 2</code>",
+        parse_mode="HTML",
+    )
+    await query.answer("Жду параметры", show_alert=True)
+
+@dp.callback_query(F.data.startswith("sg:"))
+async def cb_sg_actions(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    if (query.data or "") == "sg:create":
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    action = parts[1]
+    try:
+        planned_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+
+    if action == "run":
+        try:
+            await db.create_planned_giveaway_trigger(planned_id, query.from_user.id)
+            await db.set_planned_giveaway_status(planned_id, "triggered")
+        except Exception:
+            await query.answer("Не получилось запустить", show_alert=True)
+            return
+        await query.answer("Запрошено", show_alert=True)
+        await cb_admin_stream_giveaways(query)
+        return
+
+    if action == "end":
+        await db.set_planned_giveaway_status(planned_id, "end")
+        await query.answer("Добавлено в конец стрима", show_alert=True)
+        await cb_admin_stream_giveaways(query)
+        return
+
+    if action == "plan":
+        await db.set_planned_giveaway_status(planned_id, "planned")
+        await query.answer("Убрано из конца", show_alert=True)
+        await cb_admin_stream_giveaways(query)
+        return
+
+    await query.answer("Неизвестное действие", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("cv:"))
+async def cb_conversion_admin_action(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    action = parts[1]
+    try:
+        request_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+
+    req = await db.get_conversion_request(request_id)
+    if not req or req.get("status") != "pending":
+        await query.answer("Уже обработано", show_alert=True)
+        return
+
+    if action == "credit":
+        admin_conversion_wait[query.from_user.id] = {"request_id": request_id, "action": "credit"}
+        await query.message.answer(f"Напиши сумму GOLD для заявки <code>{request_id}</code>.", parse_mode="HTML")
+        await query.answer("Жду сумму", show_alert=True)
+        return
+
+    if action == "rej":
+        admin_conversion_wait[query.from_user.id] = {"request_id": request_id, "action": "rej"}
+        await query.message.answer(f"Напиши причину отказа для заявки <code>{request_id}</code>.", parse_mode="HTML")
+        await query.answer("Жду причину", show_alert=True)
+        return
+
+    await query.answer("Неизвестное действие", show_alert=True)
 
 @dp.callback_query(F.data == "admin")
 async def cb_admin(query: CallbackQuery):
@@ -287,6 +502,8 @@ async def cmd_cancel(message: Message):
     withdraw_sessions.pop(message.from_user.id, None)
     admin_reason_wait.pop(message.from_user.id, None)
     admin_check_sessions.pop(message.from_user.id, None)
+    admin_giveaway_sessions.pop(message.from_user.id, None)
+    admin_conversion_wait.pop(message.from_user.id, None)
     await message.answer("Отменено.")
 
 
@@ -404,6 +621,34 @@ async def private_text_router(message: Message):
         return
 
     if message.from_user.id in ADMIN_IDS:
+        gsess = admin_giveaway_sessions.get(message.from_user.id)
+        if gsess and gsess.get("stage") == "create":
+            raw = text
+            if "|" in raw:
+                title_part, count_part = raw.split("|", 1)
+                title = title_part.strip()
+                count_raw = count_part.strip()
+            else:
+                title = raw.strip()
+                count_raw = "1"
+            try:
+                winners_count = int(count_raw)
+            except Exception:
+                await message.answer("Кол-во победителей должно быть числом. Пример: <code>AKR12 | 2</code>", parse_mode="HTML")
+                return
+            if not title or winners_count <= 0:
+                await message.answer("Некорректные данные. Пример: <code>AKR12 | 2</code>", parse_mode="HTML")
+                return
+            try:
+                planned_id = await db.create_planned_giveaway(title, winners_count, message.from_user.id)
+            except Exception:
+                await message.answer("Не удалось создать розыгрыш.")
+                admin_giveaway_sessions.pop(message.from_user.id, None)
+                return
+            admin_giveaway_sessions.pop(message.from_user.id, None)
+            await message.answer(f"Создан розыгрыш #{planned_id}: {title} (победителей: {winners_count})")
+            return
+
         sess = admin_check_sessions.get(message.from_user.id)
         if sess and sess.get("stage") == "params":
             parts = text.strip().split()
@@ -506,6 +751,89 @@ async def withdraw_admin_reason(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
     wait = admin_reason_wait.get(message.from_user.id)
+    cwait = admin_conversion_wait.get(message.from_user.id)
+    if not wait and not cwait:
+        return
+
+    if cwait:
+        request_id = int(cwait["request_id"])
+        action = cwait["action"]
+        req = await db.get_conversion_request(request_id)
+        if not req or req.get("status") != "pending":
+            admin_conversion_wait.pop(message.from_user.id, None)
+            await message.reply("Заявка не найдена или уже обработана.")
+            return
+        text = (message.text or "").strip()
+        if action == "credit":
+            try:
+                amount = int(text)
+            except Exception:
+                await message.reply("Сумма должна быть числом. Пример: 1500")
+                return
+            res = await db.credit_conversion_request(request_id, message.from_user.id, amount)
+            if not res.get("ok"):
+                admin_conversion_wait.pop(message.from_user.id, None)
+                await message.reply("Не удалось начислить.")
+                return
+            try:
+                await bot.send_message(int(req["telegram_id"]), f"✅ Конвертация подтверждена. Начислено {amount} GOLD.")
+            except Exception:
+                pass
+            try:
+                await bot.edit_message_reply_markup(
+                    chat_id=int(req["admin_chat_id"]),
+                    message_id=int(req["admin_message_id"]),
+                    reply_markup=None,
+                )
+                await bot.edit_message_text(
+                    "🔄 <b>Конвертация предмета</b>\n\n"
+                    f"🎁 Предмет: <b>{req['reward_name']}</b>\n"
+                    f"🧾 Заявка: <code>{request_id}</code>\n"
+                    f"✅ Начислено: <b>{amount} GOLD</b>",
+                    chat_id=int(req["admin_chat_id"]),
+                    message_id=int(req["admin_message_id"]),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+            admin_conversion_wait.pop(message.from_user.id, None)
+            await message.reply("Готово.")
+            return
+
+        reason = text
+        if not reason:
+            await message.reply("Причина не должна быть пустой.")
+            return
+        saved = await db.decide_conversion(request_id, "rejected", message.from_user.id, reason=reason)
+        if not saved:
+            admin_conversion_wait.pop(message.from_user.id, None)
+            await message.reply("Заявка уже обработана.")
+            return
+        try:
+            await bot.send_message(int(req["telegram_id"]), f"❌ Конвертация отклонена.\nПричина: {reason}")
+        except Exception:
+            pass
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=int(req["admin_chat_id"]),
+                message_id=int(req["admin_message_id"]),
+                reply_markup=None,
+            )
+            await bot.edit_message_text(
+                "🔄 <b>Конвертация предмета</b>\n\n"
+                f"🎁 Предмет: <b>{req['reward_name']}</b>\n"
+                f"🧾 Заявка: <code>{request_id}</code>\n"
+                f"❌ Отклонено: {reason}",
+                chat_id=int(req["admin_chat_id"]),
+                message_id=int(req["admin_message_id"]),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+        admin_conversion_wait.pop(message.from_user.id, None)
+        await message.reply("Готово.")
+        return
+
     if not wait:
         return
     withdrawal_id = int(wait["withdrawal_id"])

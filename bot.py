@@ -282,6 +282,7 @@ class TwitchBot(commands.Bot):
                         total_gold += amount
                 else:
                     items.append(reward_name)
+                    await self.db.record_item_claim(int(draw_id), int(telegram_id), username, reward_name)
 
             parts: list[str] = []
             if total_gold > 0:
@@ -313,6 +314,13 @@ class TwitchBot(commands.Bot):
                     self.is_stream_online = False
                     logger.info(f"Стрим {self.channel_name} закончился.")
                     await self.send_stream_summary()
+                    planned = await self.db.list_planned_giveaways("end")
+                    for g in planned:
+                        try:
+                            await self.run_giveaway_for_reward(int(g["reward_id"]), int(g["winners_count"]))
+                            await self.db.set_planned_giveaway_status(int(g["id"]), "triggered")
+                        except Exception as e:
+                            logger.error(f"Ошибка розыгрыша в конце стрима: {e}")
 
                 delay = 1
                 await asyncio.sleep(self.stream_check_interval_seconds)
@@ -347,14 +355,47 @@ class TwitchBot(commands.Bot):
             try:
                 trigger = await self.db.claim_giveaway_trigger()
                 if trigger:
-                    logger.info(f"Мгновенный розыгрыш запрошен: id={trigger['id']} by={trigger['requested_by']}")
-                    await self.run_giveaway()
+                    if trigger.get("trigger_type") == "planned" and trigger.get("reward_id"):
+                        logger.info(
+                            f"Запрошен плановый розыгрыш: id={trigger['id']} reward_id={trigger['reward_id']} by={trigger['requested_by']}"
+                        )
+                        await self.run_giveaway_for_reward(int(trigger["reward_id"]), trigger.get("winners_count"))
+                    else:
+                        logger.info(f"Мгновенный розыгрыш запрошен: id={trigger['id']} by={trigger['requested_by']}")
+                        await self.run_giveaway()
                 await asyncio.sleep(3)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(f"Ошибка мгновенного розыгрыша: {e}")
                 await asyncio.sleep(3)
+
+    async def run_giveaway_for_reward(self, reward_id: int, winners_count: int | None = None):
+        reward = await self.db.get_reward(int(reward_id))
+        if not reward:
+            logger.info(f"Плановый розыгрыш пропущен: награда {reward_id} не найдена.")
+            return
+
+        active_users = await self.get_active_users()
+        if not active_users:
+            logger.info("Плановый розыгрыш пропущен: нет активных участников.")
+            return
+
+        reward_name = reward["name"]
+        count = int(winners_count) if winners_count is not None else int(reward.get("quantity") or 1)
+        count = max(1, count)
+        winners_count = min(count, len(active_users))
+        winners = random.sample(active_users, winners_count)
+
+        for w in winners:
+            await self.record_draw_pending(w, int(reward_id))
+
+        channel = self.get_channel(self.channel_name)
+        if channel:
+            winners_mentions = " ".join([f"@{w}" for w in winners])
+            await channel.send(f"{winners_mentions} вы выиграли \"{reward_name}\"!.")
+
+        logger.info(f"Плановый розыгрыш: {reward_name}; победители: {', '.join(winners)}")
 
     async def expire_loop(self):
         await self.wait_for_ready()
