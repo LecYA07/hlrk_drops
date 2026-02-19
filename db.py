@@ -19,6 +19,16 @@ class Database:
                     last_active_at DATETIME
                 )
             ''')
+
+            await db.execute('''
+                CREATE TABLE IF NOT EXISTS watch_time (
+                    channel TEXT NOT NULL,
+                    nickname TEXT NOT NULL,
+                    seconds INTEGER NOT NULL DEFAULT 0,
+                    last_seen_at DATETIME,
+                    PRIMARY KEY(channel, nickname)
+                )
+            ''')
             
             # Rewards
             await db.execute('''
@@ -454,6 +464,109 @@ class Database:
             )
             await db.commit()
             return True
+
+    async def apply_gold_delta_once(
+        self, telegram_id: int, amount: int, source_type: str, source_id: int
+    ) -> dict:
+        if amount == 0:
+            return {"ok": False, "status": "zero"}
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now()
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                "SELECT balance FROM gold_balances WHERE telegram_id = ?",
+                (telegram_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                current = int(row[0]) if row else 0
+
+            if amount < 0 and current < (-amount):
+                await db.execute("ROLLBACK")
+                return {"ok": False, "status": "insufficient", "balance": current}
+
+            try:
+                await db.execute(
+                    """
+                    INSERT INTO gold_transactions (telegram_id, amount, source_type, source_id, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (telegram_id, amount, source_type, source_id, now),
+                )
+            except aiosqlite.IntegrityError:
+                await db.execute("ROLLBACK")
+                return {"ok": False, "status": "exists", "balance": current}
+
+            await db.execute(
+                """
+                INSERT INTO gold_balances (telegram_id, balance, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(telegram_id) DO UPDATE SET
+                    balance = balance + excluded.balance,
+                    updated_at = excluded.updated_at
+                """,
+                (telegram_id, amount, now),
+            )
+
+            async with db.execute(
+                "SELECT balance FROM gold_balances WHERE telegram_id = ?",
+                (telegram_id,),
+            ) as cursor:
+                new_row = await cursor.fetchone()
+                new_balance = int(new_row[0]) if new_row else (current + amount)
+
+            await db.execute("COMMIT")
+            return {"ok": True, "status": "applied", "balance": new_balance}
+
+    async def update_watch_time(self, channel: str, nickname: str, max_gap_seconds: int = 300) -> None:
+        channel = (channel or "").strip().lower()
+        nickname = (nickname or "").strip().lower()
+        if not channel or not nickname:
+            return
+        async with aiosqlite.connect(self.db_path) as db:
+            now = datetime.datetime.now()
+            async with db.execute(
+                "SELECT seconds, last_seen_at FROM watch_time WHERE channel = ? AND nickname = ?",
+                (channel, nickname),
+            ) as cursor:
+                row = await cursor.fetchone()
+
+            seconds = int(row[0]) if row else 0
+            last_seen_at = row[1] if row else None
+
+            add = 0
+            if last_seen_at:
+                try:
+                    last_dt = datetime.datetime.fromisoformat(str(last_seen_at))
+                    delta = int((now - last_dt).total_seconds())
+                    if delta > 0:
+                        add = min(delta, int(max_gap_seconds))
+                except Exception:
+                    add = 0
+
+            await db.execute(
+                """
+                INSERT INTO watch_time (channel, nickname, seconds, last_seen_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(channel, nickname) DO UPDATE SET
+                    seconds = seconds + excluded.seconds,
+                    last_seen_at = excluded.last_seen_at
+                """,
+                (channel, nickname, add, now),
+            )
+            await db.commit()
+
+    async def get_watch_time_seconds(self, channel: str, nickname: str) -> int:
+        channel = (channel or "").strip().lower()
+        nickname = (nickname or "").strip().lower()
+        if not channel or not nickname:
+            return 0
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT seconds FROM watch_time WHERE channel = ? AND nickname = ?",
+                (channel, nickname),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 0
 
     async def add_check_channel(self, chat_id: int, title: str | None = None) -> None:
         async with aiosqlite.connect(self.db_path) as db:

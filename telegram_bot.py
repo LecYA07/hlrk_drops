@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import logging
 import random
 import string
@@ -43,6 +44,25 @@ GOLD_RE = re.compile(r"^\s*(\d+)\s*GOLD\s*$", re.IGNORECASE)
 def generate_code(length: int = 6) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
+def format_watch_time(seconds: int) -> str:
+    seconds = int(seconds) if seconds else 0
+    minutes = seconds // 60
+    hours = minutes // 60
+    minutes = minutes % 60
+    if hours > 0:
+        return f"{hours}ч {minutes}м"
+    return f"{minutes}м"
+
+def format_dt(value) -> str:
+    if not value:
+        return ""
+    s = str(value)
+    try:
+        dt = datetime.datetime.fromisoformat(s)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return s
+
 
 def menu_kb(is_admin: bool, is_linked: bool = False):
     kb = InlineKeyboardBuilder()
@@ -53,7 +73,6 @@ def menu_kb(is_admin: bool, is_linked: bool = False):
         
     kb.row(InlineKeyboardButton(text="ℹ️ Помощь", callback_data="help"))
     kb.row(InlineKeyboardButton(text="💸 Вывод", callback_data="withdraw"))
-    kb.row(InlineKeyboardButton(text="💰 Баланс GOLD", callback_data="balance"))
     
     if is_admin:
         kb.row(InlineKeyboardButton(text="🛡 Админ-панель", callback_data="admin"))
@@ -142,26 +161,16 @@ async def cb_profile(query: CallbackQuery):
 
     stats = await db.get_user_stats(user["twitch_username"])
     balance = await db.get_gold_balance(query.from_user.id)
+    watch_seconds = await db.get_watch_time_seconds(TWITCH_CHANNEL, user["twitch_username"])
     text = (
         f"👤 <b>Профиль</b>\n\n"
         f"🟣 Twitch: <b>{user['twitch_username']}</b>\n"
         f"🏆 Побед: <b>{stats['wins']}</b>\n"
+        f"🕓 Время просмотра: <b>{format_watch_time(watch_seconds)}</b>\n"
         f"💰 GOLD: <b>{balance}</b>"
     )
     if stats.get("last_win"):
-        text += f"\n🕒 Последний выигрыш: {stats['last_win'][1]}"
-    await query.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
-    await query.answer()
-
-
-@dp.callback_query(F.data == "balance")
-async def cb_balance(query: CallbackQuery):
-    balance = await db.get_gold_balance(query.from_user.id)
-    text = (
-        "💰 <b>Баланс GOLD</b>\n\n"
-        f"Текущий баланс: <b>{balance}</b>\n\n"
-        "Чеки можно активировать кнопкой в канале."
-    )
+        text += f"\n🎁 Последний выигрыш: <b>{stats['last_win'][1]}</b>\n🗓 {format_dt(stats['last_win'][0])}"
     await query.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
     await query.answer()
 
@@ -264,7 +273,7 @@ def withdrawal_caption(withdrawal: dict, status_line: str | None = None) -> str:
         "Новая заявка на вывод\n\n"
         f"Пользователь: <a href=\"tg://user?id={tg_id}\">{user_label}</a>\n"
         f"Предмет: {withdrawal.get('item_name')}\n"
-        f"Цена: {withdrawal.get('price')}\n"
+        f"Цена: {withdrawal.get('price')} GOLD\n"
         f"Паттерн: {withdrawal.get('pattern')}\n"
         f"ID: {withdrawal.get('id')}"
     )
@@ -287,6 +296,8 @@ async def cb_withdraw(query: CallbackQuery):
     text = (
         "Заявка на вывод\n\n"
         "Отправь скриншот выставленного предмета \"G22 flock\" на рынке.\n\n"
+        "После отправки заявки GOLD спишется с баланса.\n"
+        "Минимум: 1000 GOLD.\n\n"
         "Отмена: /cancel"
     )
     await query.message.edit_text(text, reply_markup=back_kb())
@@ -300,62 +311,136 @@ async def withdraw_photo(message: Message):
         return
     session["photo_id"] = message.photo[-1].file_id
     session["stage"] = "price"
-    await message.answer("Укажи цену лота числом. Пример: 123 или 123.45")
+    await message.answer("Укажи цену в GOLD (целым числом). Минимум: 1000")
 
 
 @dp.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
-async def withdraw_text(message: Message):
-    session = withdraw_sessions.get(message.from_user.id)
-    if not session:
-        return
+async def private_text_router(message: Message):
     text = (message.text or "").strip()
 
-    if session.get("stage") == "price":
-        raw = text.replace(",", ".").strip()
-        try:
-            float(raw)
-        except Exception:
-            await message.answer("Цена должна быть числом. Пример: 123.45")
+    session = withdraw_sessions.get(message.from_user.id)
+    if session:
+        if session.get("stage") == "price":
+            try:
+                amount = int(text)
+            except Exception:
+                await message.answer("Цена должна быть целым числом GOLD. Пример: 1500")
+                return
+            if amount < 1000:
+                await message.answer("Минимальная сумма вывода: 1000 GOLD")
+                return
+            session["price"] = str(amount)
+            session["stage"] = "pattern"
+            await message.answer("Укажи паттерн.")
             return
-        session["price"] = raw
-        session["stage"] = "pattern"
-        await message.answer("Укажи паттерн.")
+
+        if session.get("stage") == "pattern":
+            pattern = text
+            try:
+                price_gold = int(session.get("price") or 0)
+            except Exception:
+                price_gold = 0
+            if price_gold < 1000:
+                await message.answer("Минимальная сумма вывода: 1000 GOLD")
+                return
+
+            withdrawal_id = await db.create_withdrawal(
+                telegram_id=message.from_user.id,
+                telegram_username=message.from_user.username or "",
+                item_name="G22 flock",
+                photo_file_id=session.get("photo_id"),
+                price=str(price_gold),
+                pattern=pattern,
+            )
+
+            debit = await db.apply_gold_delta_once(
+                telegram_id=message.from_user.id,
+                amount=-price_gold,
+                source_type="withdrawal",
+                source_id=withdrawal_id,
+            )
+            if not debit.get("ok"):
+                await db.delete_withdrawal(withdrawal_id)
+                if debit.get("status") == "insufficient":
+                    await message.answer(
+                        f"Недостаточно GOLD для вывода.\n💰 Баланс: {debit.get('balance', 0)}"
+                    )
+                else:
+                    await message.answer("Не удалось списать GOLD. Попробуй позже.")
+                withdraw_sessions.pop(message.from_user.id, None)
+                return
+
+            withdrawal = await db.get_withdrawal(withdrawal_id)
+            caption = withdrawal_caption(withdrawal)
+            try:
+                admin_msg = await bot.send_photo(
+                    ADMIN_CHAT_ID,
+                    withdrawal.get("photo_file_id"),
+                    caption=caption,
+                    reply_markup=withdraw_admin_kb(withdrawal_id),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                await db.apply_gold_delta_once(
+                    telegram_id=message.from_user.id,
+                    amount=price_gold,
+                    source_type="withdrawal_rollback",
+                    source_id=withdrawal_id,
+                )
+                await db.delete_withdrawal(withdrawal_id)
+                await message.answer("Не удалось отправить заявку в админ-чат. Попробуй позже.")
+                withdraw_sessions.pop(message.from_user.id, None)
+                return
+
+            await db.set_withdrawal_admin_message(
+                withdrawal_id=withdrawal_id,
+                admin_chat_id=admin_msg.chat.id,
+                admin_message_id=admin_msg.message_id,
+            )
+            withdraw_sessions.pop(message.from_user.id, None)
+            await message.answer("Заявка отправлена. GOLD списан, ожидай решения админа.")
+            return
+
         return
 
-    if session.get("stage") == "pattern":
-        pattern = text
-        withdrawal_id = await db.create_withdrawal(
-            telegram_id=message.from_user.id,
-            telegram_username=message.from_user.username or "",
-            item_name="G22 flock",
-            photo_file_id=session.get("photo_id"),
-            price=session.get("price"),
-            pattern=pattern,
-        )
-        withdrawal = await db.get_withdrawal(withdrawal_id)
-        caption = withdrawal_caption(withdrawal)
-        try:
-            admin_msg = await bot.send_photo(
-                ADMIN_CHAT_ID,
-                withdrawal.get("photo_file_id"),
-                caption=caption,
-                reply_markup=withdraw_admin_kb(withdrawal_id),
+    if message.from_user.id in ADMIN_IDS:
+        sess = admin_check_sessions.get(message.from_user.id)
+        if sess and sess.get("stage") == "params":
+            parts = text.strip().split()
+            if len(parts) != 2:
+                await message.answer(
+                    "Отправь два числа: <code>N M</code>\nПример: <code>100 5</code>",
+                    parse_mode="HTML",
+                )
+                return
+            try:
+                amount = int(parts[0])
+                max_activations = int(parts[1])
+            except Exception:
+                await message.answer(
+                    "N и M должны быть числами. Пример: <code>100 5</code>",
+                    parse_mode="HTML",
+                )
+                return
+            if amount <= 0 or max_activations <= 0:
+                await message.answer("N и M должны быть больше 0.")
+                return
+            sess["amount"] = amount
+            sess["max_activations"] = max_activations
+            sess["stage"] = "channel"
+            channels = await db.list_check_channels()
+            if not channels:
+                await message.answer("Сначала добавь канал: /add_check_channel CHAT_ID Название")
+                admin_check_sessions.pop(message.from_user.id, None)
+                return
+            await message.answer(
+                f"Чек: <b>{amount} GOLD</b>, активаций: <b>{max_activations}</b>\n\nВыбери канал для публикации:",
+                reply_markup=check_channel_kb(channels),
                 parse_mode="HTML",
             )
-        except Exception:
-            await db.delete_withdrawal(withdrawal_id)
-            await message.answer("Не удалось отправить заявку в админ-чат. Попробуй позже.")
-            withdraw_sessions.pop(message.from_user.id, None)
             return
 
-        await db.set_withdrawal_admin_message(
-            withdrawal_id=withdrawal_id,
-            admin_chat_id=admin_msg.chat.id,
-            admin_message_id=admin_msg.message_id,
-        )
-        withdraw_sessions.pop(message.from_user.id, None)
-        await message.answer("Заявка отправлена. Ожидай решения админа.")
-        return
+    return
 
 
 @dp.callback_query(F.data.startswith("wd:"))
@@ -451,12 +536,23 @@ async def withdraw_admin_reason(message: Message):
             admin_reason_wait.pop(message.from_user.id, None)
             await message.reply("Заявка уже обработана.")
             return
+        try:
+            amount = int(withdrawal.get("price") or 0)
+        except Exception:
+            amount = 0
+        if amount > 0:
+            await db.apply_gold_delta_once(
+                telegram_id=int(withdrawal["telegram_id"]),
+                amount=amount,
+                source_type="withdrawal_refund",
+                source_id=withdrawal_id,
+            )
         user_text = (
             "❌ Заявка на вывод отклонена.\n"
             f"Причина: {reason}\n"
-            "Возврат на аккаунт выполнен."
+            "GOLD возвращён."
         )
-        status = f"Статус: ❌ Отклонено\nПричина: {reason}\nДействие: Возврат на аккаунт"
+        status = f"Статус: ❌ Отклонено\nПричина: {reason}\nДействие: GOLD возвращён"
     else:
         saved = await db.decide_withdrawal(
             withdrawal_id,
@@ -471,7 +567,7 @@ async def withdraw_admin_reason(message: Message):
         user_text = (
             "❌ Заявка на вывод отклонена.\n"
             f"Причина: {reason}\n"
-            "Возврат не выполняется."
+            "GOLD не возвращается."
         )
         status = f"Статус: 🗑 Отклонено и списано\nПричина: {reason}"
 
@@ -559,7 +655,13 @@ async def cb_check_create(query: CallbackQuery):
         return
     admin_check_sessions[query.from_user.id] = {"stage": "params"}
     await query.message.edit_text(
-        "Отправь параметры чека сообщением: <code>N M</code>\n\nОтмена: /cancel",
+        "🧾 <b>Создание чека</b>\n\n"
+        "Отправь одним сообщением:\n"
+        "<code>N M</code>\n\n"
+        "N — сумма GOLD\n"
+        "M — количество активаций\n\n"
+        "Пример: <code>100 5</code>\n\n"
+        "Отмена: /cancel",
         reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_checks")).as_markup(),
         parse_mode="HTML",
     )
@@ -620,40 +722,6 @@ async def cmd_del_check_channel(message: Message):
         return
     await db.remove_check_channel(chat_id)
     await message.answer("Канал удалён.")
-
-
-@dp.message(F.chat.type == "private", F.text, ~F.text.startswith("/"))
-async def admin_check_flow(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    sess = admin_check_sessions.get(message.from_user.id)
-    if not sess:
-        return
-    if sess.get("stage") != "params":
-        return
-
-    parts = (message.text or "").strip().split()
-    if len(parts) != 2:
-        await message.answer("Нужно два числа: <code>N M</code>", parse_mode="HTML")
-        return
-    try:
-        amount = int(parts[0])
-        max_activations = int(parts[1])
-    except Exception:
-        await message.answer("N и M должны быть числами. Пример: <code>100 5</code>", parse_mode="HTML")
-        return
-    if amount <= 0 or max_activations <= 0:
-        await message.answer("N и M должны быть больше 0.")
-        return
-    sess["amount"] = amount
-    sess["max_activations"] = max_activations
-    sess["stage"] = "channel"
-    channels = await db.list_check_channels()
-    if not channels:
-        await message.answer("Сначала добавь канал: /add_check_channel CHAT_ID Название")
-        admin_check_sessions.pop(message.from_user.id, None)
-        return
-    await message.answer("Выбери канал для публикации чека:", reply_markup=check_channel_kb(channels))
 
 
 @dp.callback_query(F.data.startswith("check_post:"))

@@ -234,6 +234,7 @@ class TwitchBot(commands.Bot):
                 )
 
             await db.commit()
+        await self.db.update_watch_time(self.channel_name, username)
 
     async def claim_pending_draws(self, username: str):
         now = datetime.datetime.now()

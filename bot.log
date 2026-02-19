@@ -260,3 +260,17 @@ AttributeError: 'TwitchBot' object has no attribute 'nick'
 2026-02-19 12:21:52,353 - aiogram.dispatcher - INFO - Polling stopped
 2026-02-19 12:21:52,356 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
 2026-02-19 12:21:52,359 - root - INFO - Bot stopped by user.
+2026-02-19 12:28:32,716 - Database - INFO - Database initialized.
+2026-02-19 12:28:32,719 - TwitchBot - INFO - Используем bot_id из конфига: 1446553887
+2026-02-19 12:28:32,750 - Database - INFO - Database initialized.
+2026-02-19 12:28:32,750 - aiogram.dispatcher - INFO - Start polling
+2026-02-19 12:28:33,781 - aiogram.dispatcher - INFO - Run polling for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 12:28:35,289 - twitchio.websocket - INFO - Successfully logged onto Twitch WS: hlrk_drops
+2026-02-19 12:28:35,313 - TwitchBot - INFO - Вошли как: hlrk_drops (user_id=1446553887)
+2026-02-19 12:28:35,314 - TwitchBot - INFO - Присоединились к каналу: hailrake_evo
+2026-02-19 12:28:36,556 - Helix - INFO - Helix: app access token получен
+2026-02-19 12:28:38,510 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-02-19 12:28:38,510 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8500114970)
+2026-02-19 12:28:41,500 - aiogram.dispatcher - INFO - Polling stopped
+2026-02-19 12:28:41,501 - aiogram.dispatcher - INFO - Polling stopped for bot @lecyastreet_bot id=8500114970 - 'L.ecYA Street'
+2026-02-19 12:28:41,503 - root - INFO - Bot stopped by user.
