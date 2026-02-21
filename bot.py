@@ -17,12 +17,13 @@ GOLD_RE = re.compile(r"^\s*(\d+)\s*GOLD\s*$", re.IGNORECASE)
 
 
 class TwitchBot(commands.Bot):
-    def __init__(self, config: dict, bot_id: str):
+    def __init__(self, config: dict, bot_id: str, channel_login: str, channel_id: int | None):
         self.config = config
         self.db_path = self.config["database"]["db_path"]
         self.db = Database(self.db_path)
 
-        self.channel_name = self.config["twitch"]["channel"].replace("#", "").lower()
+        self.channel_name = (channel_login or "").replace("#", "").lower()
+        self.channel_id = int(channel_id) if channel_id is not None else None
         self.ignore_list = [name.lower() for name in self.config.get("ignore_list", [])]
 
         self.active_timeout = int(self.config["giveaway"].get("active_timeout_minutes", 15))
@@ -30,10 +31,12 @@ class TwitchBot(commands.Bot):
         self.stream_check_interval_seconds = int(self.config["giveaway"].get("stream_check_interval_seconds", 60))
         self.min_interval_minutes = int(self.config["giveaway"].get("min_interval_minutes", 10))
         self.max_interval_minutes = int(self.config["giveaway"].get("max_interval_minutes", 30))
+        self.drops_enabled = 1
 
         self.helix = HelixClient(
             client_id=self.config["twitch"]["client_id"],
             client_secret=self.config["twitch"]["client_secret"],
+            user_token=self.config["twitch"].get("clip_token"),
         )
 
         raw_token = self.config["twitch"]["bot_token"]
@@ -50,41 +53,45 @@ class TwitchBot(commands.Bot):
         )
 
         self.is_stream_online = False
+        self.current_stream_session_id: int | None = None
+        self.number_game: dict | None = None
+        self.channel_user_id: str | None = None
+        self.last_clip_at: datetime.datetime | None = None
+        self.clip_cooldown_seconds = 45
         self._tasks: list[asyncio.Task] = []
 
     @classmethod
-    async def create(cls):
+    async def create(cls, channel_login: str | None = None, channel_id: int | None = None):
         with open("config.yaml", "r") as f:
             config = yaml.safe_load(f)
 
+        bot_id = await cls.resolve_bot_id(config)
+        channel_login = channel_login or config["twitch"]["channel"]
+        return cls(config, bot_id, channel_login, channel_id)
+
+    @classmethod
+    async def resolve_bot_id(cls, config: dict):
         bot_id = config["twitch"].get("bot_id")
-        
-        # Если bot_id заполнен и не дефолтный — используем его
         if bot_id and not str(bot_id).upper().startswith("YOUR_"):
             logger.info(f"Используем bot_id из конфига: {bot_id}")
-            return cls(config, bot_id)
+            return bot_id
 
-        # Иначе пробуем получить через Helix
         logger.info("bot_id не найден в конфиге, пробуем получить через Helix...")
         helix = HelixClient(
             client_id=config["twitch"]["client_id"],
             client_secret=config["twitch"]["client_secret"],
         )
-        
         bot_nick = config["twitch"]["bot_nick"]
         try:
             bot_id = await helix.get_user_id(bot_nick)
         except Exception as e:
             logger.error(f"Ошибка получения bot_id: {e}")
             bot_id = None
-
         if not bot_id:
             logger.warning(f"Не удалось получить bot_id для {bot_nick}. Бот запустится, но некоторые функции могут не работать.")
-            # Пробуем запуститься без bot_id, возможно twitchio сам справится или он не нужен для базовых функций
         else:
             logger.info(f"bot_id получен через Helix: {bot_id}")
-
-        return cls(config, bot_id)
+        return bot_id
 
     async def event_ready(self):
         # Безопасное получение nick и user_id с проверкой атрибутов
@@ -108,6 +115,14 @@ class TwitchBot(commands.Bot):
         nick = getattr(self, "nick", None) or "Unknown"
         user_id = getattr(self, "user_id", None) or "Unknown"
         logger.info(f"Вошли как: {nick} (user_id={user_id})")
+
+        try:
+            self.channel_user_id = await self.helix.get_user_id(self.channel_name)
+        except Exception as e:
+            logger.error(f"Не удалось получить id канала {self.channel_name}: {e}")
+            self.channel_user_id = None
+
+        await self.apply_channel_settings()
         
         # Явный джойн к каналу (иногда initial_channels не срабатывает как надо)
         try:
@@ -125,6 +140,30 @@ class TwitchBot(commands.Bot):
             self._tasks.append(asyncio.create_task(self.giveaway_loop()))
             self._tasks.append(asyncio.create_task(self.expire_loop()))
             self._tasks.append(asyncio.create_task(self.instant_giveaway_loop()))
+
+    async def apply_channel_settings(self):
+        if not self.channel_id and self.channel_name:
+            self.channel_id = await self.db.ensure_channel(self.channel_name, None)
+        if not self.channel_id:
+            return
+        settings = await self.db.get_channel_settings(self.channel_id)
+        if not settings:
+            await self.db.upsert_channel_settings(
+                self.channel_id,
+                min_interval_minutes=self.min_interval_minutes,
+                max_interval_minutes=self.max_interval_minutes,
+                active_timeout_minutes=self.active_timeout,
+                claim_timeout_minutes=self.claim_timeout,
+                drops_enabled=1,
+            )
+            settings = await self.db.get_channel_settings(self.channel_id)
+        if not settings:
+            return
+        self.min_interval_minutes = int(settings.get("min_interval_minutes") or self.min_interval_minutes)
+        self.max_interval_minutes = int(settings.get("max_interval_minutes") or self.max_interval_minutes)
+        self.active_timeout = int(settings.get("active_timeout_minutes") or self.active_timeout)
+        self.claim_timeout = int(settings.get("claim_timeout_minutes") or self.claim_timeout)
+        self.drops_enabled = int(settings.get("drops_enabled") or 0)
 
     @commands.command(name="ping")
     async def cmd_ping(self, ctx: commands.Context):
@@ -157,6 +196,8 @@ class TwitchBot(commands.Bot):
         if author_name != "unknown":
             await self.update_active_user(author_name)
             await self.claim_pending_draws(author_name)
+            await self.handle_number_game_message(message, author_name)
+            await self.handle_clip_trigger(message, author_name)
 
         # Ручная обработка команд, если стандартная не работает
         lowered = content.strip().lower()
@@ -174,6 +215,35 @@ class TwitchBot(commands.Bot):
             return
 
         await self.handle_commands(message)
+
+    async def handle_clip_trigger(self, message, author_name: str):
+        if not self.is_stream_online:
+            return
+        if not self.channel_user_id:
+            return
+        author = getattr(message, "author", None)
+        is_broadcaster = getattr(author, "is_broadcaster", False)
+        if not is_broadcaster:
+            return
+        content = (getattr(message, "content", "") or "").strip().lower()
+        if content != "клип":
+            return
+        await self.create_clip_now("chat")
+
+    async def create_clip_now(self, source: str):
+        if not self.is_stream_online:
+            return
+        if not self.channel_user_id:
+            return
+        now = datetime.datetime.now()
+        if self.last_clip_at and (now - self.last_clip_at).total_seconds() < self.clip_cooldown_seconds:
+            return
+        clip_id = await self.helix.create_clip(self.channel_user_id, has_delay=True)
+        if clip_id:
+            self.last_clip_at = now
+            logger.info(f"Клип создан ({source}): {clip_id}")
+        else:
+            logger.error(f"Не удалось создать клип ({source})")
 
     async def manual_link_handler(self, message, code):
         """Ручной обработчик для !link, если commands.command не срабатывает"""
@@ -235,6 +305,66 @@ class TwitchBot(commands.Bot):
 
             await db.commit()
         await self.db.update_watch_time(self.channel_name, username)
+        if self.is_stream_online and self.current_stream_session_id:
+            await self.db.update_stream_watch_time(self.current_stream_session_id, username)
+
+    async def handle_number_game_message(self, message, author_name: str):
+        game = self.number_game
+        if not game or not game.get("active"):
+            return
+        if not self.is_stream_online or not self.current_stream_session_id:
+            return
+
+        content = getattr(message, "content", "") or ""
+        s = content.strip()
+        if not s.isdigit():
+            return
+        try:
+            guess = int(s)
+        except Exception:
+            return
+
+        now = datetime.datetime.now()
+        if guess < int(game["min"]) or guess > int(game["max"]):
+            return
+
+        eligible_seconds = await self.db.get_stream_watch_time_seconds(self.current_stream_session_id, author_name)
+        is_eligible = eligible_seconds >= 600
+
+        if guess == int(game["number"]):
+            if not is_eligible:
+                last = game.get("last_not_eligible_at")
+                if not last or (now - last).total_seconds() >= 10:
+                    game["last_not_eligible_at"] = now
+                    await message.channel.send(f"@{author_name}, нужно быть на стриме минимум 10 минут.")
+                return
+            game["active"] = False
+            self.number_game = None
+            reward_id = int(game["reward_id"])
+            reward_name = str(game.get("reward_name") or "")
+            try:
+                await message.channel.send(f"@{author_name} угадал число и выиграл \"{reward_name}\"!.")
+            except Exception:
+                pass
+            await self.award_reward_immediately(author_name, reward_id)
+            return
+
+        last_hint_at = game.get("last_hint_at")
+        if last_hint_at and (now - last_hint_at).total_seconds() < 2.5:
+            return
+
+        per_user = game.setdefault("last_hint_by_user", {})
+        last_user = per_user.get(author_name)
+        if last_user and (now - last_user).total_seconds() < 12:
+            return
+
+        if random.random() > 0.35:
+            return
+
+        game["last_hint_at"] = now
+        per_user[author_name] = now
+        direction = "больше" if guess < int(game["number"]) else "меньше"
+        await message.channel.send(f"@{author_name}, загаданное число {direction}.")
 
     async def claim_pending_draws(self, username: str):
         now = datetime.datetime.now()
@@ -303,24 +433,37 @@ class TwitchBot(commands.Bot):
         delay = 1
         while True:
             try:
+                await self.apply_channel_settings()
                 is_online_now = await self.helix.is_stream_online(self.channel_name)
 
                 if is_online_now and not self.is_stream_online:
                     self.is_stream_online = True
                     logger.info(f"Стрим {self.channel_name} начался.")
+                    try:
+                        self.current_stream_session_id = await self.db.start_stream_session(self.channel_name)
+                    except Exception as e:
+                        logger.error(f"Не удалось создать stream session: {e}")
+                        self.current_stream_session_id = None
                     await self.send_stream_start_notifications()
 
                 if (not is_online_now) and self.is_stream_online:
                     self.is_stream_online = False
                     logger.info(f"Стрим {self.channel_name} закончился.")
                     await self.send_stream_summary()
-                    planned = await self.db.list_planned_giveaways("end")
+                    planned = await self.db.list_planned_giveaways(self.channel_id, "end")
                     for g in planned:
                         try:
                             await self.run_giveaway_for_reward(int(g["reward_id"]), int(g["winners_count"]))
                             await self.db.set_planned_giveaway_status(int(g["id"]), "triggered")
                         except Exception as e:
                             logger.error(f"Ошибка розыгрыша в конце стрима: {e}")
+                    if self.current_stream_session_id:
+                        try:
+                            await self.db.end_stream_session(self.current_stream_session_id)
+                        except Exception:
+                            pass
+                        self.current_stream_session_id = None
+                    self.number_game = None
 
                 delay = 1
                 await asyncio.sleep(self.stream_check_interval_seconds)
@@ -353,16 +496,31 @@ class TwitchBot(commands.Bot):
         await self.wait_for_ready()
         while True:
             try:
-                trigger = await self.db.claim_giveaway_trigger()
+                if not self.channel_id:
+                    await asyncio.sleep(3)
+                    continue
+                trigger = await self.db.claim_giveaway_trigger(self.channel_id)
                 if trigger:
-                    if trigger.get("trigger_type") == "planned" and trigger.get("reward_id"):
+                    t = trigger.get("trigger_type")
+                    if t in ("random", "planned", "guess") and not self.drops_enabled:
+                        logger.info(f"Дропы выключены для {self.channel_name}, триггер {t} пропущен.")
+                    elif t == "planned" and trigger.get("reward_id"):
                         logger.info(
                             f"Запрошен плановый розыгрыш: id={trigger['id']} reward_id={trigger['reward_id']} by={trigger['requested_by']}"
                         )
                         await self.run_giveaway_for_reward(int(trigger["reward_id"]), trigger.get("winners_count"))
+                    elif t == "guess" and trigger.get("reward_id") and trigger.get("guess_number") is not None:
+                        await self.start_number_game(
+                            reward_id=int(trigger["reward_id"]),
+                            number=int(trigger["guess_number"]),
+                            min_value=int(trigger.get("guess_min") or 1),
+                            max_value=int(trigger.get("guess_max") or 100),
+                        )
+                    elif t == "clip":
+                        await self.create_clip_now("telegram")
                     else:
                         logger.info(f"Мгновенный розыгрыш запрошен: id={trigger['id']} by={trigger['requested_by']}")
-                        await self.run_giveaway()
+                        await self.run_admin_giveaway_immediate()
                 await asyncio.sleep(3)
             except asyncio.CancelledError:
                 raise
@@ -370,25 +528,94 @@ class TwitchBot(commands.Bot):
                 logger.error(f"Ошибка мгновенного розыгрыша: {e}")
                 await asyncio.sleep(3)
 
+    async def get_eligible_viewers(self, min_seconds: int = 600) -> list[str]:
+        if not self.is_stream_online or not self.current_stream_session_id:
+            return []
+        users = await self.db.get_stream_eligible_users(self.current_stream_session_id, min_seconds)
+        ignore = set(self.ignore_list)
+        ignore.add((getattr(self, "nick", "") or "").lower())
+        out: list[str] = []
+        for u in users:
+            lu = (u or "").strip().lower()
+            if not lu or lu in ignore:
+                continue
+            out.append(lu)
+        return out
+
+    async def award_reward_immediately(self, winner: str, reward_id: int):
+        reward = await self.db.get_reward(int(reward_id))
+        if not reward:
+            return
+        if self.channel_id and reward.get("channel_id") not in (None, self.channel_id):
+            return
+        reward_name = reward["name"] or ""
+
+        draw_id = await self.db.create_draw_claimed(self.channel_name, winner, int(reward_id), notified_in_tg=1)
+
+        telegram_id = await self.db.get_telegram_id_by_twitch_username(winner)
+        m = GOLD_RE.match(reward_name or "")
+        if telegram_id:
+            if m:
+                amount = int(m.group(1))
+                credited = await self.db.credit_gold_once(int(telegram_id), amount, "draw", int(draw_id))
+                if credited:
+                    await notify_user(int(telegram_id), f"💰 Начислено: {amount} GOLD")
+            else:
+                await self.db.record_item_claim(int(draw_id), int(telegram_id), winner, reward_name)
+                await notify_user(int(telegram_id), f"🎁 Ты выиграл: {reward_name}")
+
+    async def run_admin_giveaway_immediate(self):
+        if not self.is_stream_online or not self.drops_enabled or not self.channel_id:
+            return
+        eligible = await self.get_eligible_viewers(600)
+        if not eligible:
+            logger.info("Админ-розыгрыш пропущен: нет участников 10+ минут.")
+            return
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT id, name, weight, quantity FROM rewards WHERE enabled = 1 AND channel_id = ?",
+                (int(self.channel_id),),
+            ) as cursor:
+                rewards = await cursor.fetchall()
+        if not rewards:
+            logger.info("Админ-розыгрыш пропущен: нет включённых наград.")
+            return
+        reward_id, reward_name, _, reward_qty = self.select_weighted_reward(rewards)
+        winners_count = min(int(reward_qty), len(eligible))
+        winners = random.sample(eligible, winners_count)
+        for w in winners:
+            await self.award_reward_immediately(w, int(reward_id))
+        channel = self.get_channel(self.channel_name)
+        if channel:
+            winners_mentions = " ".join([f"@{w}" for w in winners])
+            await channel.send(f"{winners_mentions} вы выиграли \"{reward_name}\"!.")
+        logger.info(f"Админ-розыгрыш: {reward_name}; победители: {', '.join(winners)}")
+
     async def run_giveaway_for_reward(self, reward_id: int, winners_count: int | None = None):
         reward = await self.db.get_reward(int(reward_id))
         if not reward:
             logger.info(f"Плановый розыгрыш пропущен: награда {reward_id} не найдена.")
             return
+        if self.channel_id and reward.get("channel_id") not in (None, self.channel_id):
+            logger.info(f"Плановый розыгрыш пропущен: награда {reward_id} другого канала.")
+            return
 
-        active_users = await self.get_active_users()
-        if not active_users:
-            logger.info("Плановый розыгрыш пропущен: нет активных участников.")
+        if not self.drops_enabled:
+            logger.info("Плановый розыгрыш пропущен: дропы выключены.")
+            return
+
+        eligible = await self.get_eligible_viewers(600)
+        if not eligible:
+            logger.info("Плановый розыгрыш пропущен: нет участников 10+ минут.")
             return
 
         reward_name = reward["name"]
         count = int(winners_count) if winners_count is not None else int(reward.get("quantity") or 1)
         count = max(1, count)
-        winners_count = min(count, len(active_users))
-        winners = random.sample(active_users, winners_count)
-
+        winners_count = min(count, len(eligible))
+        winners = random.sample(eligible, winners_count)
         for w in winners:
-            await self.record_draw_pending(w, int(reward_id))
+            await self.award_reward_immediately(w, int(reward_id))
 
         channel = self.get_channel(self.channel_name)
         if channel:
@@ -396,6 +623,42 @@ class TwitchBot(commands.Bot):
             await channel.send(f"{winners_mentions} вы выиграли \"{reward_name}\"!.")
 
         logger.info(f"Плановый розыгрыш: {reward_name}; победители: {', '.join(winners)}")
+
+    async def start_number_game(self, reward_id: int, number: int, min_value: int, max_value: int):
+        if not self.is_stream_online or not self.current_stream_session_id:
+            return
+        reward = await self.db.get_reward(int(reward_id))
+        if not reward:
+            return
+        if self.channel_id and reward.get("channel_id") not in (None, self.channel_id):
+            return
+        if not self.drops_enabled:
+            return
+        min_value = int(min_value)
+        max_value = int(max_value)
+        if min_value >= max_value:
+            min_value, max_value = 1, 100
+        number = int(number)
+        if number < min_value or number > max_value:
+            number = random.randint(min_value, max_value)
+        self.number_game = {
+            "active": True,
+            "reward_id": int(reward_id),
+            "reward_name": reward["name"] or "",
+            "number": number,
+            "min": min_value,
+            "max": max_value,
+            "started_at": datetime.datetime.now(),
+            "last_hint_at": None,
+            "last_hint_by_user": {},
+        }
+        channel = self.get_channel(self.channel_name)
+        if channel:
+            await channel.send(
+                f"🎲 Угадай число от {min_value} до {max_value}! "
+                f"Приз: \"{reward['name']}\". "
+                "Пиши число в чат."
+            )
 
     async def expire_loop(self):
         await self.wait_for_ready()
@@ -446,8 +709,14 @@ class TwitchBot(commands.Bot):
             await self.db.mark_notified(data["draw_ids"])
 
     async def run_giveaway(self):
+        if not self.drops_enabled or not self.channel_id:
+            logger.info("Розыгрыш пропущен: дропы выключены.")
+            return
         async with aiosqlite.connect(self.db_path) as db:
-            async with db.execute("SELECT id, name, weight, quantity FROM rewards WHERE enabled = 1") as cursor:
+            async with db.execute(
+                "SELECT id, name, weight, quantity FROM rewards WHERE enabled = 1 AND channel_id = ?",
+                (int(self.channel_id),),
+            ) as cursor:
                 rewards = await cursor.fetchall()
 
         if not rewards:

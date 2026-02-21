@@ -38,6 +38,10 @@ admin_reason_wait: dict[int, dict] = {}
 admin_check_sessions: dict[int, dict] = {}
 admin_giveaway_sessions: dict[int, dict] = {}
 admin_conversion_wait: dict[int, dict] = {}
+author_sessions: dict[int, dict] = {}
+admin_channel_sessions: dict[int, dict] = {}
+channel_request_sessions: dict[int, dict] = {}
+DEFAULT_CHANNEL_ID: int | None = None
 
 BOT_USERNAME: str | None = None
 GOLD_RE = re.compile(r"^\s*(\d+)\s*GOLD\s*$", re.IGNORECASE)
@@ -65,6 +69,22 @@ def format_dt(value) -> str:
     except Exception:
         return s
 
+async def get_default_channel_id() -> int | None:
+    global DEFAULT_CHANNEL_ID
+    if DEFAULT_CHANNEL_ID:
+        return DEFAULT_CHANNEL_ID
+    if not TWITCH_CHANNEL:
+        return None
+    DEFAULT_CHANNEL_ID = await db.ensure_channel(TWITCH_CHANNEL, None)
+    return DEFAULT_CHANNEL_ID
+
+async def get_owner_channel(telegram_id: int, channel_id: int) -> dict | None:
+    channels = await db.list_channels_by_owner(telegram_id)
+    for ch in channels:
+        if int(ch["id"]) == int(channel_id):
+            return ch
+    return None
+
 
 def menu_kb(is_admin: bool, is_linked: bool = False):
     kb = InlineKeyboardBuilder()
@@ -75,6 +95,8 @@ def menu_kb(is_admin: bool, is_linked: bool = False):
         
     kb.row(InlineKeyboardButton(text="ℹ️ Помощь", callback_data="help"))
     kb.row(InlineKeyboardButton(text="💸 Вывод", callback_data="withdraw"))
+    kb.row(InlineKeyboardButton(text="🧑‍💻 Панель автора", callback_data="author_panel"))
+    kb.row(InlineKeyboardButton(text="🔌 Подключить бота", callback_data="connect_bot"))
     
     if is_admin:
         kb.row(InlineKeyboardButton(text="🛡 Админ-панель", callback_data="admin"))
@@ -105,7 +127,90 @@ def admin_kb():
     )
     kb.row(InlineKeyboardButton(text="🎁 Розыгрыши на стрим", callback_data="admin_stream_giveaways"))
     kb.row(InlineKeyboardButton(text="⚡ Мгновенный розыгрыш", callback_data="admin_instant_giveaway"))
+    kb.row(InlineKeyboardButton(text="🔢 Загадать число", callback_data="admin_guess_number"))
+    kb.row(InlineKeyboardButton(text="🎬 Клип", callback_data="admin_clip"))
+    kb.row(InlineKeyboardButton(text="⚙️ Каналы", callback_data="admin_channels"))
     kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="menu"))
+    return kb.as_markup()
+
+def author_channels_kb(channels: list[dict]):
+    kb = InlineKeyboardBuilder()
+    for ch in channels:
+        kb.row(InlineKeyboardButton(text=f"🎥 {ch['login']}", callback_data=f"author:channel:{ch['id']}"))
+    kb.row(InlineKeyboardButton(text="🔌 Подключить бота", callback_data="connect_bot"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="menu"))
+    return kb.as_markup()
+
+def author_channel_kb(channel_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⚙️ Настройки дропов", callback_data=f"author:settings:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🎁 Награды", callback_data=f"author:rewards:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="author_panel"))
+    return kb.as_markup()
+
+def author_settings_kb(channel_id: int, drops_enabled: int):
+    kb = InlineKeyboardBuilder()
+    label = "✅ Дропы: ВКЛ" if int(drops_enabled) else "🚫 Дропы: ВЫКЛ"
+    kb.row(InlineKeyboardButton(text=label, callback_data=f"author:toggle_drops:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="⏱ Интервал дропов", callback_data=f"author:set_interval:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="⏳ Активность", callback_data=f"author:set_active:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="⌛️ Таймаут забора", callback_data=f"author:set_claim:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f"author:channel:{channel_id}"))
+    return kb.as_markup()
+
+def author_rewards_kb(channel_id: int, rewards: list[dict]):
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="➕ Добавить награду", callback_data=f"author:reward_add:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🔄 Обновить", callback_data=f"author:rewards:{channel_id}"))
+    for r in rewards[:10]:
+        enabled = int(r.get("enabled") or 0)
+        label = f"{'✅' if enabled else '🚫'} #{r['id']} {r['name']}"
+        kb.row(InlineKeyboardButton(text=label[:64], callback_data=f"author:reward_toggle:{channel_id}:{r['id']}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f"author:channel:{channel_id}"))
+    return kb.as_markup()
+
+def admin_channels_kb(channels: list[dict]):
+    kb = InlineKeyboardBuilder()
+    for ch in channels:
+        status = "✅" if int(ch.get("enabled") or 0) else "🚫"
+        kb.row(InlineKeyboardButton(text=f"{status} {ch['login']}", callback_data=f"adminch:channel:{ch['id']}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin"))
+    return kb.as_markup()
+
+def admin_channel_kb(channel_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⚙️ Настройки дропов", callback_data=f"adminch:settings:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🎁 Награды", callback_data=f"adminch:rewards:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin_channels"))
+    return kb.as_markup()
+
+def admin_settings_kb(channel_id: int, drops_enabled: int):
+    kb = InlineKeyboardBuilder()
+    label = "✅ Дропы: ВКЛ" if int(drops_enabled) else "🚫 Дропы: ВЫКЛ"
+    kb.row(InlineKeyboardButton(text=label, callback_data=f"adminch:toggle_drops:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="⏱ Интервал дропов", callback_data=f"adminch:set_interval:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="⏳ Активность", callback_data=f"adminch:set_active:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="⌛️ Таймаут забора", callback_data=f"adminch:set_claim:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f"adminch:channel:{channel_id}"))
+    return kb.as_markup()
+
+def admin_rewards_kb(channel_id: int, rewards: list[dict]):
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="➕ Добавить награду", callback_data=f"adminch:reward_add:{channel_id}"))
+    kb.row(InlineKeyboardButton(text="🔄 Обновить", callback_data=f"adminch:rewards:{channel_id}"))
+    for r in rewards[:10]:
+        enabled = int(r.get("enabled") or 0)
+        label = f"{'✅' if enabled else '🚫'} #{r['id']} {r['name']}"
+        kb.row(InlineKeyboardButton(text=label[:64], callback_data=f"adminch:reward_toggle:{channel_id}:{r['id']}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data=f"adminch:channel:{channel_id}"))
+    return kb.as_markup()
+
+def channel_request_admin_kb(request_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"chanreq:approve:{request_id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"chanreq:reject:{request_id}"),
+    )
     return kb.as_markup()
 
 async def get_bot_username() -> str:
@@ -139,6 +244,498 @@ async def cb_help(query: CallbackQuery):
     )
     await query.message.edit_text(text, reply_markup=back_kb(), parse_mode="HTML")
     await query.answer()
+
+
+@dp.callback_query(F.data == "author_panel")
+async def cb_author_panel(query: CallbackQuery):
+    channels = await db.list_channels_by_owner(query.from_user.id)
+    if not channels:
+        await query.message.edit_text(
+            "🧑‍💻 <b>Панель автора</b>\n\n"
+            "У тебя пока нет подключённых каналов.",
+            reply_markup=author_channels_kb([]),
+            parse_mode="HTML",
+        )
+        await query.answer()
+        return
+    lines = [f"• {c['login']} (ID: {c['id']})" for c in channels]
+    text = "🧑‍💻 <b>Панель автора</b>\n\nТвои каналы:\n" + "\n".join(lines)
+    await query.message.edit_text(text, reply_markup=author_channels_kb(channels), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data == "admin_channels")
+async def cb_admin_channels(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    channels = await db.list_all_channels()
+    if not channels:
+        await query.message.edit_text(
+            "⚙️ <b>Каналы</b>\n\nПока нет каналов.",
+            reply_markup=admin_channels_kb([]),
+            parse_mode="HTML",
+        )
+        await query.answer()
+        return
+    lines = []
+    for c in channels:
+        status = "ВКЛ" if int(c.get("enabled") or 0) else "ВЫКЛ"
+        owner = c.get("owner_telegram_id") or "—"
+        lines.append(f"#{c['id']} — <b>{c['login']}</b> — {status} — owner {owner}")
+    text = "⚙️ <b>Каналы</b>\n\n" + "\n".join(lines)
+    await query.message.edit_text(text, reply_markup=admin_channels_kb(channels), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("adminch:channel:"))
+async def cb_admin_channel(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await db.get_channel_by_id(channel_id)
+    if not ch:
+        await query.answer("Канал не найден", show_alert=True)
+        return
+    text = f"🎥 <b>Канал:</b> {ch['login']}\n\nВыбери действие."
+    await query.message.edit_text(text, reply_markup=admin_channel_kb(channel_id), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("adminch:settings:"))
+async def cb_admin_channel_settings(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await db.get_channel_by_id(channel_id)
+    if not ch:
+        await query.answer("Канал не найден", show_alert=True)
+        return
+    settings = await db.get_channel_settings(channel_id)
+    if not settings:
+        await db.upsert_channel_settings(
+            channel_id,
+            min_interval_minutes=int(config["giveaway"].get("min_interval_minutes", 10)),
+            max_interval_minutes=int(config["giveaway"].get("max_interval_minutes", 30)),
+            active_timeout_minutes=int(config["giveaway"].get("active_timeout_minutes", 15)),
+            claim_timeout_minutes=int(config["giveaway"].get("claim_timeout_minutes", 7)),
+            drops_enabled=1,
+        )
+        settings = await db.get_channel_settings(channel_id)
+    drops_enabled = int(settings.get("drops_enabled") or 0) if settings else 0
+    text = (
+        "⚙️ <b>Настройки дропов</b>\n"
+        f"Канал: <b>{ch['login']}</b>\n\n"
+        f"Дропы: <b>{'ВКЛ' if drops_enabled else 'ВЫКЛ'}</b>\n"
+        f"Интервал: <b>{settings.get('min_interval_minutes')}</b>–<b>{settings.get('max_interval_minutes')}</b> мин\n"
+        f"Активность: <b>{settings.get('active_timeout_minutes')}</b> мин\n"
+        f"Таймаут забора: <b>{settings.get('claim_timeout_minutes')}</b> мин"
+    )
+    await query.message.edit_text(text, reply_markup=admin_settings_kb(channel_id, drops_enabled), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("adminch:toggle_drops:"))
+async def cb_admin_channel_toggle_drops(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    settings = await db.get_channel_settings(channel_id)
+    drops_enabled = int(settings.get("drops_enabled") or 0) if settings else 0
+    await db.update_channel_settings(channel_id, drops_enabled=0 if drops_enabled else 1)
+    await cb_admin_channel_settings(query)
+
+
+@dp.callback_query(F.data.startswith("adminch:set_interval:"))
+async def cb_admin_channel_set_interval(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    admin_channel_sessions[query.from_user.id] = {"stage": "set_interval", "channel_id": channel_id}
+    await query.message.answer("Отправь интервал в минутах: <code>MIN MAX</code>\nПример: <code>10 30</code>", parse_mode="HTML")
+    await query.answer("Жду интервал", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("adminch:set_active:"))
+async def cb_admin_channel_set_active(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    admin_channel_sessions[query.from_user.id] = {"stage": "set_active", "channel_id": channel_id}
+    await query.message.answer("Отправь время активности в минутах. Пример: <code>15</code>", parse_mode="HTML")
+    await query.answer("Жду значение", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("adminch:set_claim:"))
+async def cb_admin_channel_set_claim(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    admin_channel_sessions[query.from_user.id] = {"stage": "set_claim", "channel_id": channel_id}
+    await query.message.answer("Отправь таймаут забора в минутах. Пример: <code>7</code>", parse_mode="HTML")
+    await query.answer("Жду значение", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("adminch:rewards:"))
+async def cb_admin_channel_rewards(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await db.get_channel_by_id(channel_id)
+    if not ch:
+        await query.answer("Канал не найден", show_alert=True)
+        return
+    rewards = await db.list_rewards(channel_id)
+    if not rewards:
+        text = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\nПока нет наград."
+    else:
+        lines = []
+        for r in rewards[:10]:
+            enabled = "ВКЛ" if int(r.get("enabled") or 0) else "ВЫКЛ"
+            lines.append(f"#{r['id']} — <b>{r['name']}</b> — вес {r['weight']} — кол-во {r['quantity']} — {enabled}")
+        text = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\n" + "\n".join(lines)
+    await query.message.edit_text(text, reply_markup=admin_rewards_kb(channel_id, rewards), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("adminch:reward_add:"))
+async def cb_admin_channel_reward_add(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    admin_channel_sessions[query.from_user.id] = {"stage": "reward_add", "channel_id": channel_id}
+    await query.message.answer(
+        "Отправь одним сообщением:\n"
+        "<code>Название | Вес | Кол-во | Вкл(0/1) | Описание</code>\n"
+        "Описание можно не писать.\nПример: <code>AKR12 | 50 | 1 | 1 | Штурмовая винтовка</code>",
+        parse_mode="HTML",
+    )
+    await query.answer("Жду параметры", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("adminch:reward_toggle:"))
+async def cb_admin_channel_reward_toggle(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 4:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+        reward_id = int(parts[3])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    reward = await db.get_reward(reward_id)
+    if not reward or int(reward.get("channel_id") or 0) != int(channel_id):
+        await query.answer("Награда не найдена", show_alert=True)
+        return
+    new_enabled = 0 if int(reward.get("enabled") or 0) else 1
+    await db.set_reward_enabled(reward_id, new_enabled)
+    await cb_admin_channel_rewards(query)
+
+@dp.callback_query(F.data.startswith("author:channel:"))
+async def cb_author_channel(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    text = f"🎥 <b>Канал:</b> {ch['login']}\n\nВыбери действие."
+    await query.message.edit_text(text, reply_markup=author_channel_kb(channel_id), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("author:settings:"))
+async def cb_author_settings(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    settings = await db.get_channel_settings(channel_id)
+    if not settings:
+        await db.upsert_channel_settings(
+            channel_id,
+            min_interval_minutes=int(config["giveaway"].get("min_interval_minutes", 10)),
+            max_interval_minutes=int(config["giveaway"].get("max_interval_minutes", 30)),
+            active_timeout_minutes=int(config["giveaway"].get("active_timeout_minutes", 15)),
+            claim_timeout_minutes=int(config["giveaway"].get("claim_timeout_minutes", 7)),
+            drops_enabled=1,
+        )
+        settings = await db.get_channel_settings(channel_id)
+    drops_enabled = int(settings.get("drops_enabled") or 0) if settings else 0
+    text = (
+        "⚙️ <b>Настройки дропов</b>\n"
+        f"Канал: <b>{ch['login']}</b>\n\n"
+        f"Дропы: <b>{'ВКЛ' if drops_enabled else 'ВЫКЛ'}</b>\n"
+        f"Интервал: <b>{settings.get('min_interval_minutes')}</b>–<b>{settings.get('max_interval_minutes')}</b> мин\n"
+        f"Активность: <b>{settings.get('active_timeout_minutes')}</b> мин\n"
+        f"Таймаут забора: <b>{settings.get('claim_timeout_minutes')}</b> мин"
+    )
+    await query.message.edit_text(text, reply_markup=author_settings_kb(channel_id, drops_enabled), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("author:toggle_drops:"))
+async def cb_author_toggle_drops(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    settings = await db.get_channel_settings(channel_id)
+    drops_enabled = int(settings.get("drops_enabled") or 0) if settings else 0
+    await db.update_channel_settings(channel_id, drops_enabled=0 if drops_enabled else 1)
+    await cb_author_settings(query)
+
+
+@dp.callback_query(F.data.startswith("author:set_interval:"))
+async def cb_author_set_interval(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    author_sessions[query.from_user.id] = {"stage": "set_interval", "channel_id": channel_id}
+    await query.message.answer("Отправь интервал в минутах: <code>MIN MAX</code>\nПример: <code>10 30</code>", parse_mode="HTML")
+    await query.answer("Жду интервал", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("author:set_active:"))
+async def cb_author_set_active(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    author_sessions[query.from_user.id] = {"stage": "set_active", "channel_id": channel_id}
+    await query.message.answer("Отправь время активности в минутах. Пример: <code>15</code>", parse_mode="HTML")
+    await query.answer("Жду значение", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("author:set_claim:"))
+async def cb_author_set_claim(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    author_sessions[query.from_user.id] = {"stage": "set_claim", "channel_id": channel_id}
+    await query.message.answer("Отправь таймаут забора в минутах. Пример: <code>7</code>", parse_mode="HTML")
+    await query.answer("Жду значение", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("author:rewards:"))
+async def cb_author_rewards(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    rewards = await db.list_rewards(channel_id)
+    if not rewards:
+        text = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\nПока нет наград."
+    else:
+        lines = []
+        for r in rewards[:10]:
+            enabled = "ВКЛ" if int(r.get("enabled") or 0) else "ВЫКЛ"
+            lines.append(f"#{r['id']} — <b>{r['name']}</b> — вес {r['weight']} — кол-во {r['quantity']} — {enabled}")
+        text = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\n" + "\n".join(lines)
+    await query.message.edit_text(text, reply_markup=author_rewards_kb(channel_id, rewards), parse_mode="HTML")
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("author:reward_add:"))
+async def cb_author_reward_add(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    author_sessions[query.from_user.id] = {"stage": "reward_add", "channel_id": channel_id}
+    await query.message.answer(
+        "Отправь одним сообщением:\n"
+        "<code>Название | Вес | Кол-во | Вкл(0/1) | Описание</code>\n"
+        "Описание можно не писать.\nПример: <code>AKR12 | 50 | 1 | 1 | Штурмовая винтовка</code>",
+        parse_mode="HTML",
+    )
+    await query.answer("Жду параметры", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("author:reward_toggle:"))
+async def cb_author_reward_toggle(query: CallbackQuery):
+    parts = (query.data or "").split(":")
+    if len(parts) != 4:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+        reward_id = int(parts[3])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    ch = await get_owner_channel(query.from_user.id, channel_id)
+    if not ch:
+        await query.answer("Нет доступа", show_alert=True)
+        return
+    reward = await db.get_reward(reward_id)
+    if not reward or int(reward.get("channel_id") or 0) != int(channel_id):
+        await query.answer("Награда не найдена", show_alert=True)
+        return
+    new_enabled = 0 if int(reward.get("enabled") or 0) else 1
+    await db.set_reward_enabled(reward_id, new_enabled)
+    await cb_author_rewards(query)
+
+
+@dp.callback_query(F.data == "connect_bot")
+async def cb_connect_bot(query: CallbackQuery):
+    channel_request_sessions[query.from_user.id] = {"stage": "twitch_login"}
+    await query.message.edit_text(
+        "🔌 <b>Подключить бота</b>\n\n"
+        "Отправь логин Twitch-канала без ссылок.\n"
+        "Пример: <code>mychannel</code>",
+        parse_mode="HTML",
+    )
+    await query.answer("Жду логин", show_alert=True)
 
 
 @dp.callback_query(F.data == "link")
@@ -286,7 +883,11 @@ async def cb_admin_stream_giveaways(query: CallbackQuery):
     if query.from_user.id not in ADMIN_IDS:
         await query.answer("⛔️ Нет доступа", show_alert=True)
         return
-    rows = await db.list_planned_giveaways()
+    channel_id = await get_default_channel_id()
+    if not channel_id:
+        await query.answer("Канал не настроен", show_alert=True)
+        return
+    rows = await db.list_planned_giveaways(channel_id)
     text = "🎁 <b>Розыгрыши на стрим</b>\n\n"
     if not rows:
         text += "Пока пусто."
@@ -304,7 +905,11 @@ async def cb_sg_create(query: CallbackQuery):
     if query.from_user.id not in ADMIN_IDS:
         await query.answer("⛔️ Нет доступа", show_alert=True)
         return
-    admin_giveaway_sessions[query.from_user.id] = {"stage": "create"}
+    channel_id = await get_default_channel_id()
+    if not channel_id:
+        await query.answer("Канал не настроен", show_alert=True)
+        return
+    admin_giveaway_sessions[query.from_user.id] = {"stage": "create", "channel_id": channel_id}
     await query.message.answer(
         "Отправь одним сообщением:\n<code>Название | Кол-во победителей</code>\nПример: <code>AKR12 | 2</code>",
         parse_mode="HTML",
@@ -390,6 +995,82 @@ async def cb_conversion_admin_action(query: CallbackQuery):
 
     await query.answer("Неизвестное действие", show_alert=True)
 
+
+@dp.callback_query(F.data.startswith("chanreq:"))
+async def cb_channel_request_admin(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    action = parts[1]
+    try:
+        request_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    req = await db.get_channel_request(request_id)
+    if not req or req.get("status") != "pending":
+        await query.answer("Уже обработано", show_alert=True)
+        return
+
+    if action == "approve":
+        channel_id = await db.ensure_channel(req["twitch_login"], req["telegram_id"], enabled=1)
+        settings = await db.get_channel_settings(channel_id)
+        if not settings:
+            await db.upsert_channel_settings(
+                channel_id,
+                min_interval_minutes=int(config["giveaway"].get("min_interval_minutes", 10)),
+                max_interval_minutes=int(config["giveaway"].get("max_interval_minutes", 30)),
+                active_timeout_minutes=int(config["giveaway"].get("active_timeout_minutes", 15)),
+                claim_timeout_minutes=int(config["giveaway"].get("claim_timeout_minutes", 7)),
+                drops_enabled=1,
+            )
+        await db.set_channel_request_status(request_id, "approved")
+        try:
+            await bot.send_message(req["telegram_id"], f"✅ Заявка одобрена. Канал {req['twitch_login']} подключён.")
+        except Exception:
+            pass
+        status_text = "✅ Одобрено"
+    elif action == "reject":
+        await db.set_channel_request_status(request_id, "rejected")
+        try:
+            await bot.send_message(req["telegram_id"], f"❌ Заявка отклонена. Канал {req['twitch_login']}.")
+        except Exception:
+            pass
+        status_text = "❌ Отклонено"
+    else:
+        await query.answer("Неизвестное действие", show_alert=True)
+        return
+
+    text_admin = (
+        "🧩 <b>Заявка на подключение бота</b>\n\n"
+        f"🧾 ID: <code>{request_id}</code>\n"
+        f"👤 TG: @{req['telegram_username'] or '—'} (id <code>{req['telegram_id']}</code>)\n"
+        f"🎥 Twitch: <b>{req['twitch_login']}</b>\n"
+        f"📞 Контакт: <b>{req['contact']}</b>\n"
+        f"{status_text}"
+    )
+    if req.get("note"):
+        text_admin += f"\n📝 Примечание: {req['note']}"
+    try:
+        await bot.edit_message_reply_markup(
+            chat_id=int(req["admin_chat_id"]),
+            message_id=int(req["admin_message_id"]),
+            reply_markup=None,
+        )
+        await bot.edit_message_text(
+            text_admin,
+            chat_id=int(req["admin_chat_id"]),
+            message_id=int(req["admin_message_id"]),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+    await query.answer("Готово", show_alert=True)
+
 @dp.callback_query(F.data == "admin")
 async def cb_admin(query: CallbackQuery):
     if query.from_user.id not in ADMIN_IDS:
@@ -404,11 +1085,58 @@ async def cb_admin_instant_giveaway(query: CallbackQuery):
     if query.from_user.id not in ADMIN_IDS:
         await query.answer("⛔️ Нет доступа", show_alert=True)
         return
-    trigger_id = await db.create_giveaway_trigger(query.from_user.id)
+    channel_id = await get_default_channel_id()
+    if not channel_id:
+        await query.answer("Канал не настроен", show_alert=True)
+        return
+    trigger_id = await db.create_giveaway_trigger(channel_id, query.from_user.id)
     await query.answer("Запрос отправлен", show_alert=True)
     try:
         await query.message.edit_text(
             f"⚡ Запрошен мгновенный розыгрыш. ID: <code>{trigger_id}</code>",
+            reply_markup=admin_kb(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@dp.callback_query(F.data == "admin_guess_number")
+async def cb_admin_guess_number(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    channel_id = await get_default_channel_id()
+    if not channel_id:
+        await query.answer("Канал не настроен", show_alert=True)
+        return
+    admin_giveaway_sessions[query.from_user.id] = {"stage": "guess_setup", "channel_id": channel_id}
+    await query.message.answer(
+        "Отправь одним сообщением:\n"
+        "<code>Приз | MIN MAX</code>\n"
+        "или\n"
+        "<code>Приз | ЧИСЛО | MIN MAX</code>\n\n"
+        "Пример: <code>AKR12 | 1 100</code>\n"
+        "Пример: <code>AKR12 | 42 | 1 100</code>",
+        parse_mode="HTML",
+    )
+    await query.answer("Жду параметры", show_alert=True)
+
+
+@dp.callback_query(F.data == "admin_clip")
+async def cb_admin_clip(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    channel_id = await get_default_channel_id()
+    if not channel_id:
+        await query.answer("Канал не настроен", show_alert=True)
+        return
+    trigger_id = await db.create_clip_trigger(channel_id, query.from_user.id)
+    await query.answer("Запрос отправлен", show_alert=True)
+    try:
+        await query.message.edit_text(
+            f"🎬 Запрошен клип. ID: <code>{trigger_id}</code>",
             reply_markup=admin_kb(),
             parse_mode="HTML",
         )
@@ -620,9 +1348,426 @@ async def private_text_router(message: Message):
 
         return
 
+    req_sess = channel_request_sessions.get(message.from_user.id)
+    if req_sess:
+        stage = req_sess.get("stage")
+        if stage == "twitch_login":
+            login = text.strip().lower().replace("https://", "").replace("http://", "")
+            login = login.replace("twitch.tv/", "").replace("twitch.tv\\", "").strip("/")
+            login = login.lstrip("@")
+            if not re.fullmatch(r"[a-z0-9_]{3,25}", login or ""):
+                await message.answer("Некорректный логин. Пример: <code>mychannel</code>", parse_mode="HTML")
+                return
+            existing = await db.get_channel_by_login(login)
+            if existing and existing.get("owner_telegram_id") == message.from_user.id:
+                channel_request_sessions.pop(message.from_user.id, None)
+                await message.answer("Этот канал уже подключён.", reply_markup=back_kb())
+                return
+            req_sess["twitch_login"] = login
+            req_sess["stage"] = "contact"
+            await message.answer("Укажи контакт для связи. Например: <code>@username</code> или Discord.", parse_mode="HTML")
+            return
+
+        if stage == "contact":
+            contact = text.strip()
+            if not contact:
+                await message.answer("Контакт не должен быть пустым.")
+                return
+            req_sess["contact"] = contact
+            req_sess["stage"] = "note"
+            await message.answer("Добавь примечание или отправь <code>-</code>.", parse_mode="HTML")
+            return
+
+        if stage == "note":
+            note = text.strip()
+            if note == "-" or note.lower() in ("нет", "no"):
+                note = ""
+            login = req_sess.get("twitch_login") or ""
+            contact = req_sess.get("contact") or ""
+            try:
+                request_id = await db.create_channel_request(
+                    telegram_id=message.from_user.id,
+                    telegram_username=message.from_user.username or "",
+                    twitch_login=login,
+                    contact=contact,
+                    note=note,
+                )
+            except Exception:
+                channel_request_sessions.pop(message.from_user.id, None)
+                await message.answer("Не удалось отправить заявку. Попробуй позже.")
+                return
+
+            text_admin = (
+                "🧩 <b>Заявка на подключение бота</b>\n\n"
+                f"🧾 ID: <code>{request_id}</code>\n"
+                f"👤 TG: @{message.from_user.username or '—'} (id <code>{message.from_user.id}</code>)\n"
+                f"🎥 Twitch: <b>{login}</b>\n"
+                f"📞 Контакт: <b>{contact}</b>"
+            )
+            if note:
+                text_admin += f"\n📝 Примечание: {note}"
+            try:
+                admin_msg = await bot.send_message(
+                    ADMIN_CHAT_ID,
+                    text_admin,
+                    reply_markup=channel_request_admin_kb(request_id),
+                    parse_mode="HTML",
+                )
+                await db.set_channel_request_admin_message(request_id, admin_msg.chat.id, admin_msg.message_id)
+            except Exception:
+                channel_request_sessions.pop(message.from_user.id, None)
+                await message.answer("Не удалось отправить в админ-чат. Попробуй позже.")
+                return
+
+            channel_request_sessions.pop(message.from_user.id, None)
+            await message.answer("Заявка отправлена. Ожидай решения админа.", reply_markup=back_kb())
+            return
+
+    admin_sess = admin_channel_sessions.get(message.from_user.id)
+    if admin_sess and message.from_user.id in ADMIN_IDS:
+        stage = admin_sess.get("stage")
+        channel_id = admin_sess.get("channel_id")
+        ch = await db.get_channel_by_id(int(channel_id)) if channel_id else None
+        if not ch:
+            admin_channel_sessions.pop(message.from_user.id, None)
+            await message.answer("Канал не найден.", reply_markup=back_kb())
+            return
+
+        if stage == "set_interval":
+            parts = text.replace("-", " ").split()
+            if len(parts) != 2:
+                await message.answer("Отправь интервал: <code>MIN MAX</code>", parse_mode="HTML")
+                return
+            try:
+                min_v = int(parts[0])
+                max_v = int(parts[1])
+            except Exception:
+                await message.answer("Значения должны быть числами.", parse_mode="HTML")
+                return
+            if min_v <= 0 or max_v <= 0 or min_v >= max_v:
+                await message.answer("MIN должен быть меньше MAX и больше 0.")
+                return
+            await db.update_channel_settings(channel_id, min_interval_minutes=min_v, max_interval_minutes=max_v)
+            admin_channel_sessions.pop(message.from_user.id, None)
+        elif stage == "set_active":
+            try:
+                value = int(text.strip())
+            except Exception:
+                await message.answer("Нужно число. Пример: <code>15</code>", parse_mode="HTML")
+                return
+            if value <= 0:
+                await message.answer("Значение должно быть больше 0.")
+                return
+            await db.update_channel_settings(channel_id, active_timeout_minutes=value)
+            admin_channel_sessions.pop(message.from_user.id, None)
+        elif stage == "set_claim":
+            try:
+                value = int(text.strip())
+            except Exception:
+                await message.answer("Нужно число. Пример: <code>7</code>", parse_mode="HTML")
+                return
+            if value <= 0:
+                await message.answer("Значение должно быть больше 0.")
+                return
+            await db.update_channel_settings(channel_id, claim_timeout_minutes=value)
+            admin_channel_sessions.pop(message.from_user.id, None)
+        elif stage == "reward_add":
+            parts = [p.strip() for p in text.split("|")]
+            parts = [p for p in parts if p != ""]
+            if len(parts) < 2:
+                await message.answer(
+                    "Формат: <code>Название | Вес | Кол-во | Вкл(0/1) | Описание</code>",
+                    parse_mode="HTML",
+                )
+                return
+            name = parts[0]
+            try:
+                weight = int(parts[1])
+            except Exception:
+                await message.answer("Вес должен быть числом.")
+                return
+            quantity = 1
+            enabled = 1
+            description = ""
+            if len(parts) > 2:
+                try:
+                    quantity = int(parts[2])
+                except Exception:
+                    await message.answer("Кол-во должно быть числом.")
+                    return
+            if len(parts) > 3:
+                try:
+                    enabled = int(parts[3])
+                except Exception:
+                    await message.answer("Вкл должно быть 0 или 1.")
+                    return
+            if enabled not in (0, 1):
+                await message.answer("Вкл должно быть 0 или 1.")
+                return
+            if len(parts) > 4:
+                description = parts[4]
+            if not name or weight < 0 or quantity <= 0:
+                await message.answer("Проверь данные и попробуй ещё раз.")
+                return
+            try:
+                await db.create_reward(
+                    channel_id=int(channel_id),
+                    name=name,
+                    description=description,
+                    weight=weight,
+                    quantity=quantity,
+                    enabled=enabled,
+                )
+            except Exception:
+                await message.answer("Не удалось добавить награду.")
+                return
+            admin_channel_sessions.pop(message.from_user.id, None)
+        else:
+            admin_channel_sessions.pop(message.from_user.id, None)
+
+        settings = await db.get_channel_settings(channel_id)
+        if stage in ("set_interval", "set_active", "set_claim"):
+            drops_enabled = int(settings.get("drops_enabled") or 0) if settings else 0
+            text_out = (
+                "⚙️ <b>Настройки дропов</b>\n"
+                f"Канал: <b>{ch['login']}</b>\n\n"
+                f"Дропы: <b>{'ВКЛ' if drops_enabled else 'ВЫКЛ'}</b>\n"
+                f"Интервал: <b>{settings.get('min_interval_minutes')}</b>–<b>{settings.get('max_interval_minutes')}</b> мин\n"
+                f"Активность: <b>{settings.get('active_timeout_minutes')}</b> мин\n"
+                f"Таймаут забора: <b>{settings.get('claim_timeout_minutes')}</b> мин"
+            )
+            await message.answer(text_out, reply_markup=admin_settings_kb(int(channel_id), drops_enabled), parse_mode="HTML")
+            return
+
+        if stage == "reward_add":
+            rewards = await db.list_rewards(channel_id)
+            if not rewards:
+                text_out = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\nПока нет наград."
+            else:
+                lines = []
+                for r in rewards[:10]:
+                    enabled = "ВКЛ" if int(r.get("enabled") or 0) else "ВЫКЛ"
+                    lines.append(f"#{r['id']} — <b>{r['name']}</b> — вес {r['weight']} — кол-во {r['quantity']} — {enabled}")
+                text_out = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\n" + "\n".join(lines)
+            await message.answer(text_out, reply_markup=admin_rewards_kb(int(channel_id), rewards), parse_mode="HTML")
+            return
+
+    a_sess = author_sessions.get(message.from_user.id)
+    if a_sess:
+        stage = a_sess.get("stage")
+        channel_id = a_sess.get("channel_id")
+        ch = await get_owner_channel(message.from_user.id, int(channel_id)) if channel_id else None
+        if not ch:
+            author_sessions.pop(message.from_user.id, None)
+            await message.answer("Нет доступа к каналу.", reply_markup=back_kb())
+            return
+
+        if stage == "set_interval":
+            parts = text.replace("-", " ").split()
+            if len(parts) != 2:
+                await message.answer("Отправь интервал: <code>MIN MAX</code>", parse_mode="HTML")
+                return
+            try:
+                min_v = int(parts[0])
+                max_v = int(parts[1])
+            except Exception:
+                await message.answer("Значения должны быть числами.", parse_mode="HTML")
+                return
+            if min_v <= 0 or max_v <= 0 or min_v >= max_v:
+                await message.answer("MIN должен быть меньше MAX и больше 0.")
+                return
+            await db.update_channel_settings(channel_id, min_interval_minutes=min_v, max_interval_minutes=max_v)
+            author_sessions.pop(message.from_user.id, None)
+        elif stage == "set_active":
+            try:
+                value = int(text.strip())
+            except Exception:
+                await message.answer("Нужно число. Пример: <code>15</code>", parse_mode="HTML")
+                return
+            if value <= 0:
+                await message.answer("Значение должно быть больше 0.")
+                return
+            await db.update_channel_settings(channel_id, active_timeout_minutes=value)
+            author_sessions.pop(message.from_user.id, None)
+        elif stage == "set_claim":
+            try:
+                value = int(text.strip())
+            except Exception:
+                await message.answer("Нужно число. Пример: <code>7</code>", parse_mode="HTML")
+                return
+            if value <= 0:
+                await message.answer("Значение должно быть больше 0.")
+                return
+            await db.update_channel_settings(channel_id, claim_timeout_minutes=value)
+            author_sessions.pop(message.from_user.id, None)
+        elif stage == "reward_add":
+            parts = [p.strip() for p in text.split("|")]
+            parts = [p for p in parts if p != ""]
+            if len(parts) < 2:
+                await message.answer(
+                    "Формат: <code>Название | Вес | Кол-во | Вкл(0/1) | Описание</code>",
+                    parse_mode="HTML",
+                )
+                return
+            name = parts[0]
+            try:
+                weight = int(parts[1])
+            except Exception:
+                await message.answer("Вес должен быть числом.")
+                return
+            quantity = 1
+            enabled = 1
+            description = ""
+            if len(parts) > 2:
+                try:
+                    quantity = int(parts[2])
+                except Exception:
+                    await message.answer("Кол-во должно быть числом.")
+                    return
+            if len(parts) > 3:
+                try:
+                    enabled = int(parts[3])
+                except Exception:
+                    await message.answer("Вкл должно быть 0 или 1.")
+                    return
+            if enabled not in (0, 1):
+                await message.answer("Вкл должно быть 0 или 1.")
+                return
+            if len(parts) > 4:
+                description = parts[4]
+            if not name or weight < 0 or quantity <= 0:
+                await message.answer("Проверь данные и попробуй ещё раз.")
+                return
+            try:
+                await db.create_reward(
+                    channel_id=int(channel_id),
+                    name=name,
+                    description=description,
+                    weight=weight,
+                    quantity=quantity,
+                    enabled=enabled,
+                )
+            except Exception:
+                await message.answer("Не удалось добавить награду.")
+                return
+            author_sessions.pop(message.from_user.id, None)
+        else:
+            author_sessions.pop(message.from_user.id, None)
+
+        settings = await db.get_channel_settings(channel_id)
+        if stage in ("set_interval", "set_active", "set_claim"):
+            drops_enabled = int(settings.get("drops_enabled") or 0) if settings else 0
+            text_out = (
+                "⚙️ <b>Настройки дропов</b>\n"
+                f"Канал: <b>{ch['login']}</b>\n\n"
+                f"Дропы: <b>{'ВКЛ' if drops_enabled else 'ВЫКЛ'}</b>\n"
+                f"Интервал: <b>{settings.get('min_interval_minutes')}</b>–<b>{settings.get('max_interval_minutes')}</b> мин\n"
+                f"Активность: <b>{settings.get('active_timeout_minutes')}</b> мин\n"
+                f"Таймаут забора: <b>{settings.get('claim_timeout_minutes')}</b> мин"
+            )
+            await message.answer(text_out, reply_markup=author_settings_kb(int(channel_id), drops_enabled), parse_mode="HTML")
+            return
+
+        if stage == "reward_add":
+            rewards = await db.list_rewards(channel_id)
+            if not rewards:
+                text_out = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\nПока нет наград."
+            else:
+                lines = []
+                for r in rewards[:10]:
+                    enabled = "ВКЛ" if int(r.get("enabled") or 0) else "ВЫКЛ"
+                    lines.append(f"#{r['id']} — <b>{r['name']}</b> — вес {r['weight']} — кол-во {r['quantity']} — {enabled}")
+                text_out = f"🎁 <b>Награды</b>\nКанал: <b>{ch['login']}</b>\n\n" + "\n".join(lines)
+            await message.answer(text_out, reply_markup=author_rewards_kb(int(channel_id), rewards), parse_mode="HTML")
+            return
+
     if message.from_user.id in ADMIN_IDS:
         gsess = admin_giveaway_sessions.get(message.from_user.id)
+        if gsess and gsess.get("stage") == "guess_setup":
+            channel_id = gsess.get("channel_id")
+            if not channel_id:
+                admin_giveaway_sessions.pop(message.from_user.id, None)
+                await message.answer("Канал не настроен.")
+                return
+            parts = [p.strip() for p in text.split("|")]
+            parts = [p for p in parts if p]
+            if not parts:
+                await message.answer("Некорректные данные.")
+                return
+            prize = parts[0]
+            number = None
+            range_part = None
+            if len(parts) == 1:
+                range_part = "1 100"
+            elif len(parts) == 2:
+                range_part = parts[1]
+            else:
+                try:
+                    number = int(parts[1])
+                except Exception:
+                    number = None
+                range_part = parts[2]
+
+            if not range_part:
+                await message.answer("Укажи диапазон. Пример: <code>AKR12 | 1 100</code>", parse_mode="HTML")
+                return
+            r = range_part.replace("-", " ").split()
+            if len(r) != 2:
+                await message.answer("Диапазон должен быть двумя числами. Пример: <code>1 100</code>", parse_mode="HTML")
+                return
+            try:
+                min_v = int(r[0])
+                max_v = int(r[1])
+            except Exception:
+                await message.answer("Диапазон должен быть числами. Пример: <code>1 100</code>", parse_mode="HTML")
+                return
+            if min_v >= max_v:
+                await message.answer("MIN должен быть меньше MAX.")
+                return
+            if number is None:
+                number = random.randint(min_v, max_v)
+            if number < min_v or number > max_v:
+                await message.answer("ЧИСЛО должно быть внутри диапазона.")
+                return
+
+            try:
+                reward_id = await db.create_reward(
+                    channel_id=int(channel_id),
+                    name=prize,
+                    description="guess_game",
+                    weight=0,
+                    quantity=1,
+                    enabled=0,
+                )
+                trigger_id = await db.create_number_guess_trigger(
+                    channel_id=int(channel_id),
+                    requested_by=message.from_user.id,
+                    reward_id=int(reward_id),
+                    guess_number=int(number),
+                    guess_min=int(min_v),
+                    guess_max=int(max_v),
+                )
+            except Exception:
+                admin_giveaway_sessions.pop(message.from_user.id, None)
+                await message.answer("Не удалось создать игру.")
+                return
+
+            admin_giveaway_sessions.pop(message.from_user.id, None)
+            await message.answer(
+                "Игра запущена.\n"
+                f"Приз: {prize}\n"
+                f"Диапазон: {min_v}..{max_v}\n"
+                f"Триггер: {trigger_id}\n"
+                f"Загаданное число: {number}"
+            )
+            return
+
         if gsess and gsess.get("stage") == "create":
+            channel_id = gsess.get("channel_id")
+            if not channel_id:
+                admin_giveaway_sessions.pop(message.from_user.id, None)
+                await message.answer("Канал не настроен.")
+                return
             raw = text
             if "|" in raw:
                 title_part, count_part = raw.split("|", 1)
@@ -640,7 +1785,7 @@ async def private_text_router(message: Message):
                 await message.answer("Некорректные данные. Пример: <code>AKR12 | 2</code>", parse_mode="HTML")
                 return
             try:
-                planned_id = await db.create_planned_giveaway(title, winners_count, message.from_user.id)
+                planned_id = await db.create_planned_giveaway(int(channel_id), title, winners_count, message.from_user.id)
             except Exception:
                 await message.answer("Не удалось создать розыгрыш.")
                 admin_giveaway_sessions.pop(message.from_user.id, None)
