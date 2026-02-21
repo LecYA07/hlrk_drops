@@ -134,6 +134,13 @@ def admin_kb():
     kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="menu"))
     return kb.as_markup()
 
+def admin_pick_channel_kb(action: str, channels: list[dict], back_cb: str = "admin"):
+    kb = InlineKeyboardBuilder()
+    for ch in channels:
+        kb.row(InlineKeyboardButton(text=f"🎥 {ch['login']}", callback_data=f"admpick:{action}:{ch['id']}"))
+    kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data=back_cb))
+    return kb.as_markup()
+
 def author_channels_kb(channels: list[dict]):
     kb = InlineKeyboardBuilder()
     for ch in channels:
@@ -864,7 +871,7 @@ async def cb_convert_pick(query: CallbackQuery):
 def stream_giveaways_kb(rows: list[dict]):
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="➕ Создать", callback_data="sg:create"))
-    kb.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stream_giveaways"))
+    kb.row(InlineKeyboardButton(text="🔄 Обновить", callback_data="sg:refresh"))
     for g in rows[:10]:
         gid = int(g["id"])
         status = g.get("status") or "planned"
@@ -879,17 +886,11 @@ def stream_giveaways_kb(rows: list[dict]):
     kb.row(InlineKeyboardButton(text="🔙 Назад", callback_data="admin"))
     return kb.as_markup()
 
-@dp.callback_query(F.data == "admin_stream_giveaways")
-async def cb_admin_stream_giveaways(query: CallbackQuery):
-    if query.from_user.id not in ADMIN_IDS:
-        await query.answer("⛔️ Нет доступа", show_alert=True)
-        return
-    channel_id = await get_default_channel_id()
-    if not channel_id:
-        await query.answer("Канал не настроен", show_alert=True)
-        return
+async def render_stream_giveaways(message: Message, channel_id: int):
     rows = await db.list_planned_giveaways(channel_id)
-    text = "🎁 <b>Розыгрыши на стрим</b>\n\n"
+    ch = await db.get_channel_by_id(channel_id)
+    channel_label = ch["login"] if ch else str(channel_id)
+    text = f"🎁 <b>Розыгрыши на стрим</b>\nКанал: <b>{channel_label}</b>\n\n"
     if not rows:
         text += "Пока пусто."
     else:
@@ -898,7 +899,53 @@ async def cb_admin_stream_giveaways(query: CallbackQuery):
             status = g.get("status") or "planned"
             lines.append(f"#{g['id']} — <b>{g['title']}</b> — победителей: {g['winners_count']} — {status}")
         text += "\n".join(lines)
-    await query.message.edit_text(text, reply_markup=stream_giveaways_kb(rows), parse_mode="HTML")
+    await message.edit_text(text, reply_markup=stream_giveaways_kb(rows), parse_mode="HTML")
+
+@dp.callback_query(F.data == "admin_stream_giveaways")
+async def cb_admin_stream_giveaways(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    channels = await db.list_enabled_channels()
+    if not channels:
+        await query.answer("Нет включённых каналов", show_alert=True)
+        return
+    await query.message.edit_text(
+        "🎁 <b>Розыгрыши на стрим</b>\n\nВыбери канал:",
+        reply_markup=admin_pick_channel_kb("stream", channels),
+        parse_mode="HTML",
+    )
+    await query.answer()
+
+@dp.callback_query(F.data.startswith("admpick:stream:"))
+async def cb_admin_pick_stream_channel(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
+        return
+    admin_giveaway_sessions[query.from_user.id] = {"stage": "stream_manage", "channel_id": channel_id}
+    await render_stream_giveaways(query.message, channel_id)
+    await query.answer()
+
+@dp.callback_query(F.data == "sg:refresh")
+async def cb_sg_refresh(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    sess = admin_giveaway_sessions.get(query.from_user.id) or {}
+    channel_id = sess.get("channel_id")
+    if not channel_id:
+        await cb_admin_stream_giveaways(query)
+        return
+    await render_stream_giveaways(query.message, int(channel_id))
     await query.answer()
 
 @dp.callback_query(F.data == "sg:create")
@@ -906,11 +953,13 @@ async def cb_sg_create(query: CallbackQuery):
     if query.from_user.id not in ADMIN_IDS:
         await query.answer("⛔️ Нет доступа", show_alert=True)
         return
-    channel_id = await get_default_channel_id()
+    sess = admin_giveaway_sessions.get(query.from_user.id) or {}
+    channel_id = sess.get("channel_id")
     if not channel_id:
-        await query.answer("Канал не настроен", show_alert=True)
+        await query.answer("Сначала выбери канал", show_alert=True)
+        await cb_admin_stream_giveaways(query)
         return
-    admin_giveaway_sessions[query.from_user.id] = {"stage": "create", "channel_id": channel_id}
+    admin_giveaway_sessions[query.from_user.id] = {"stage": "create", "channel_id": int(channel_id)}
     await query.message.answer(
         "Отправь одним сообщением:\n<code>Название | Кол-во победителей</code>\nПример: <code>AKR12 | 2</code>",
         parse_mode="HTML",
@@ -943,19 +992,28 @@ async def cb_sg_actions(query: CallbackQuery):
             await query.answer("Не получилось запустить", show_alert=True)
             return
         await query.answer("Запрошено", show_alert=True)
-        await cb_admin_stream_giveaways(query)
+        sess = admin_giveaway_sessions.get(query.from_user.id) or {}
+        channel_id = sess.get("channel_id")
+        if channel_id:
+            await render_stream_giveaways(query.message, int(channel_id))
         return
 
     if action == "end":
         await db.set_planned_giveaway_status(planned_id, "end")
         await query.answer("Добавлено в конец стрима", show_alert=True)
-        await cb_admin_stream_giveaways(query)
+        sess = admin_giveaway_sessions.get(query.from_user.id) or {}
+        channel_id = sess.get("channel_id")
+        if channel_id:
+            await render_stream_giveaways(query.message, int(channel_id))
         return
 
     if action == "plan":
         await db.set_planned_giveaway_status(planned_id, "planned")
         await query.answer("Убрано из конца", show_alert=True)
-        await cb_admin_stream_giveaways(query)
+        sess = admin_giveaway_sessions.get(query.from_user.id) or {}
+        channel_id = sess.get("channel_id")
+        if channel_id:
+            await render_stream_giveaways(query.message, int(channel_id))
         return
 
     await query.answer("Неизвестное действие", show_alert=True)
@@ -1086,15 +1144,39 @@ async def cb_admin_instant_giveaway(query: CallbackQuery):
     if query.from_user.id not in ADMIN_IDS:
         await query.answer("⛔️ Нет доступа", show_alert=True)
         return
-    channel_id = await get_default_channel_id()
-    if not channel_id:
-        await query.answer("Канал не настроен", show_alert=True)
+    channels = await db.list_enabled_channels()
+    if not channels:
+        await query.answer("Нет включённых каналов", show_alert=True)
+        return
+    await query.message.edit_text(
+        "⚡ <b>Мгновенный розыгрыш</b>\n\nВыбери канал:",
+        reply_markup=admin_pick_channel_kb("instant", channels),
+        parse_mode="HTML",
+    )
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("admpick:instant:"))
+async def cb_admin_pick_instant_channel(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
         return
     trigger_id = await db.create_giveaway_trigger(channel_id, query.from_user.id)
+    ch = await db.get_channel_by_id(channel_id)
+    channel_label = ch["login"] if ch else str(channel_id)
     await query.answer("Запрос отправлен", show_alert=True)
     try:
         await query.message.edit_text(
-            f"⚡ Запрошен мгновенный розыгрыш. ID: <code>{trigger_id}</code>",
+            f"⚡ Запрошен мгновенный розыгрыш\nКанал: <b>{channel_label}</b>\nID: <code>{trigger_id}</code>",
             reply_markup=admin_kb(),
             parse_mode="HTML",
         )
@@ -1107,12 +1189,37 @@ async def cb_admin_guess_number(query: CallbackQuery):
     if query.from_user.id not in ADMIN_IDS:
         await query.answer("⛔️ Нет доступа", show_alert=True)
         return
-    channel_id = await get_default_channel_id()
-    if not channel_id:
-        await query.answer("Канал не настроен", show_alert=True)
+    channels = await db.list_enabled_channels()
+    if not channels:
+        await query.answer("Нет включённых каналов", show_alert=True)
+        return
+    await query.message.edit_text(
+        "🔢 <b>Угадай число</b>\n\nВыбери канал:",
+        reply_markup=admin_pick_channel_kb("guess", channels),
+        parse_mode="HTML",
+    )
+    await query.answer()
+
+
+@dp.callback_query(F.data.startswith("admpick:guess:"))
+async def cb_admin_pick_guess_channel(query: CallbackQuery):
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("⛔️ Нет доступа", show_alert=True)
+        return
+    parts = (query.data or "").split(":")
+    if len(parts) != 3:
+        await query.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        channel_id = int(parts[2])
+    except Exception:
+        await query.answer("Некорректный ID", show_alert=True)
         return
     admin_giveaway_sessions[query.from_user.id] = {"stage": "guess_setup", "channel_id": channel_id}
+    ch = await db.get_channel_by_id(channel_id)
+    channel_label = ch["login"] if ch else str(channel_id)
     await query.message.answer(
+        f"Канал: <b>{channel_label}</b>\n\n"
         "Отправь одним сообщением:\n"
         "<code>Приз | MIN MAX</code>\n"
         "или\n"

@@ -479,7 +479,7 @@ class TwitchBot(commands.Bot):
 
         while True:
             try:
-                next_minutes = random.randint(self.min_interval_minutes, self.max_interval_minutes)
+                next_minutes = random.randint(15, 30)
                 await asyncio.sleep(next_minutes * 60)
 
                 if not self.is_stream_online:
@@ -546,8 +546,6 @@ class TwitchBot(commands.Bot):
         reward = await self.db.get_reward(int(reward_id))
         if not reward:
             return
-        if self.channel_id and reward.get("channel_id") not in (None, self.channel_id):
-            return
         reward_name = reward["name"] or ""
 
         draw_id = await self.db.create_draw_claimed(self.channel_name, winner, int(reward_id), notified_in_tg=1)
@@ -573,8 +571,7 @@ class TwitchBot(commands.Bot):
             return
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT id, name, weight, quantity FROM rewards WHERE enabled = 1 AND channel_id = ?",
-                (int(self.channel_id),),
+                "SELECT id, name, weight, quantity FROM rewards WHERE enabled = 1",
             ) as cursor:
                 rewards = await cursor.fetchall()
         if not rewards:
@@ -595,9 +592,6 @@ class TwitchBot(commands.Bot):
         reward = await self.db.get_reward(int(reward_id))
         if not reward:
             logger.info(f"Плановый розыгрыш пропущен: награда {reward_id} не найдена.")
-            return
-        if self.channel_id and reward.get("channel_id") not in (None, self.channel_id):
-            logger.info(f"Плановый розыгрыш пропущен: награда {reward_id} другого канала.")
             return
 
         if not self.drops_enabled:
@@ -685,7 +679,11 @@ class TwitchBot(commands.Bot):
         if not telegram_ids:
             return
 
-        text = f"🔴 Стрим начался на канале {self.channel_name}! Заходи в чат, чтобы участвовать в дропах."
+        text = (
+            f"🔴 Стрим начался на канале {self.channel_name}!\n"
+            f"https://twitch.tv/{self.channel_name}\n\n"
+            "Заходи в чат, чтобы участвовать в дропах."
+        )
         for tg_id in telegram_ids:
             await notify_user(tg_id, text)
             await asyncio.sleep(0.03)
@@ -714,8 +712,7 @@ class TwitchBot(commands.Bot):
             return
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute(
-                "SELECT id, name, weight, quantity FROM rewards WHERE enabled = 1 AND channel_id = ?",
-                (int(self.channel_id),),
+                "SELECT id, name, weight, quantity FROM rewards WHERE enabled = 1",
             ) as cursor:
                 rewards = await cursor.fetchall()
 
