@@ -4,10 +4,11 @@ import logging
 import random
 import string
 import re
+import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message, FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import yaml
@@ -1197,6 +1198,21 @@ async def cmd_broadcast(message: Message):
         except Exception:
             continue
     await message.answer(f"Отправлено: {sent}")
+
+
+@dp.message(Command("backup"))
+async def cmd_backup(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    db_path = os.path.abspath(config["database"]["db_path"])
+    if not os.path.exists(db_path):
+        await message.answer("Файл базы данных не найден.")
+        return
+    try:
+        await message.answer_document(FSInputFile(db_path), caption="Резервная копия базы данных")
+    except Exception as e:
+        logger.error(f"Не удалось отправить backup: {e}")
+        await message.answer("Не удалось отправить файл базы данных.")
 
 
 def withdraw_admin_kb(withdrawal_id: int):
